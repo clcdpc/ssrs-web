@@ -1,0 +1,17 @@
+@page "/subscriptions"
+@model SubscriptionsModel
+@{ ViewData["Title"] = "My subscriptions"; }
+<section id="my-subscriptions">
+    <div class="subscriptions-title"><div><p class="eyebrow">Scheduled reports</p><h1>My subscriptions</h1></div><a asp-page="/Index">Browse reports</a></div>
+    <p>Create subscriptions with the Subscribe action on a report. Links require a portal sign-in; delivered attachments can be opened without authentication.</p>
+    <div class="subscription-filters">
+        <div><label for="subscriptions-filter">Filter subscriptions</label><input id="subscriptions-filter" type="search" placeholder="Name, report or recipient" /></div>
+        <div><label for="subscriptions-state">State</label><select id="subscriptions-state"><option value="all">All</option><option value="enabled">Enabled</option><option value="paused">Paused</option></select></div>
+        <div><label for="subscriptions-sort">Sort by</label><select id="subscriptions-sort"><option value="next">Next execution</option><option value="name">Name</option><option value="report">Report</option><option value="status">Last status</option></select></div>
+        <button id="subscriptions-reload" class="quiet" type="button">Refresh</button>
+    </div>
+    <p id="subscriptions-status" role="status" aria-live="polite" tabindex="-1">Loading subscriptions…</p>
+    <div class="subscriptions-table-scroll" role="region" aria-label="My subscription list" tabindex="0"><table class="subscriptions-table" role="table"><caption class="visually-hidden">Subscription definitions and latest execution status</caption><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Subscription / report</th><th scope="col" role="columnheader">Schedule</th><th scope="col" role="columnheader">Delivery / recipients</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="subscriptions-rows" role="rowgroup"></tbody></table></div>
+    <noscript><p class="notice">Enable JavaScript to manage subscriptions.</p></noscript>
+</section>
+<dialog id="subscription-history" class="subscription-dialog" aria-labelledby="history-heading"><div class="subscription-heading"><h2 id="history-heading">Execution history</h2><button id="history-close" type="button" class="quiet" aria-label="Close execution history">×</button></div><p id="history-status" role="status" aria-live="polite"></p><div class="subscriptions-table-scroll"><table class="subscriptions-table" role="table"><caption class="visually-hidden">Most recent 100 occurrences</caption><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Scheduled</th><th scope="col" role="columnheader">Outcome</th><th scope="col" role="columnheader">Attempts</th><th scope="col" role="columnheader">Details</th></tr></thead><tbody id="history-rows" role="rowgroup"></tbody></table></div></dialog>

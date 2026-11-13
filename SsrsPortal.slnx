@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SsrsPortal.Mock/SsrsPortal.Mock.csproj" />
+    <Project Path="src/SsrsPortal/SsrsPortal.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SsrsPortal.BrowserChecks/SsrsPortal.BrowserChecks.csproj" />
+    <Project Path="tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj" />
+    <Project Path="tests/SsrsPortal.SubscriptionTests/SsrsPortal.SubscriptionTests.csproj" />
+  </Folder>
+</Solution>

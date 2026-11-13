@@ -1,0 +1,56 @@
+@page
+@model ReportModel
+@inject SsrsPortal.Subscriptions.SubscriptionOptions Subscriptions
+@{
+    ViewData["Title"] = Model.Report.Name;
+    ViewData["MainClass"] = "report-main";
+    ViewData["Breadcrumbs"] = Model.Breadcrumbs;
+    ViewData["ReportName"] = Model.Report.Name;
+}
+<div id="report" data-id="@Model.Report.Id" data-report-path="@Model.Report.Path" data-report-name="@Model.Report.Name" data-canonical-url="@Model.CanonicalUrl" data-link-query="@Model.LinkQuery" data-token="@Model.Token" data-session-message="@Model.SessionMessage" data-folder-url="@Url.Page("/Index", Model.FolderRoute)">
+    <h1 class="visually-hidden">@Model.Report.Name</h1>
+    <section aria-label="Report parameters" class="parameter-section">
+        <form id="parameters" class="parameter-panel parameter-grid" aria-busy="true">
+            <div id="parameter-controls">
+                <div id="fields"></div>
+            </div>
+            <div class="report-actions">
+                <button id="cancel-run" class="quiet" type="button" disabled aria-hidden="true">Cancel request</button>
+                <button id="run" type="submit" disabled><span class="run-label">View report</span><span class="run-pending" aria-hidden="true"><span class="run-spinner" aria-hidden="true"></span>Running…</span></button>
+            </div>
+            <span id="dirty" title="Parameters changed — select View report to update." hidden>Parameters changed — select View report to update.</span>
+        </form>
+        <div class="workspace-feedback">
+            <span id="status" class="report-status visually-hidden" role="status" aria-live="polite" aria-atomic="true">Loading report inputs…</span>
+            <button id="resynchronize" class="quiet" type="button" hidden>Reload report output</button>
+        </div>
+    </section>
+    <div class="parameter-divider">
+        @if (Subscriptions.Enabled)
+        {
+            <button id="subscribe" class="quiet" type="button" disabled>Subscribe</button>
+        }
+        <button id="toggle-parameters" class="parameter-toggle" type="button" aria-expanded="true" aria-controls="parameters" aria-label="Hide parameters"><span class="parameter-chevron" aria-hidden="true"></span></button>
+        <button id="copy-report-link" class="quiet icon-action" type="button" aria-label="Copy report link" title="Copy report link" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" focusable="false"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 2 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" /></svg></button>
+        <span id="link-feedback" class="link-feedback" role="status" aria-live="polite" aria-atomic="true"></span>
+    </div>
+    <section id="viewer" aria-label="Report output" hidden>
+        <div class="viewer-toolbar">
+            <div class="page-controls" role="group" aria-label="Report pages">
+                <button id="first" class="quiet" type="button" disabled>First</button><button id="previous" class="quiet" type="button" disabled>Previous</button>
+                <span id="page-label" aria-live="polite" aria-atomic="true"></span>
+                <button id="next" class="quiet" type="button" disabled>Next</button><button id="last" class="quiet" type="button" disabled>Last</button>
+            </div>
+            <div class="exports" role="group" aria-label="Download report">
+                <a id="print-report" target="_blank" rel="noopener noreferrer" aria-label="Print complete report (PDF in a new tab)" title="Print complete report" aria-disabled="true">Print</a>
+                <a id="pdf">PDF</a><a id="xlsx">Excel</a><a id="docx">Word</a><a id="csv">CSV</a><button id="cancel-session" class="quiet" type="button">Close</button>
+            </div>
+        </div>
+        <iframe id="report-frame" title="Isolated report content" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    </section>
+    <noscript><p class="notice">JavaScript is required to resolve dependent report choices and run reports. Please enable it for this portal.</p></noscript>
+    @if (Subscriptions.Enabled)
+    {
+        <partial name="_SubscriptionEditor" />
+    }
+</div>

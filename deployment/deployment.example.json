@@ -1,0 +1,19 @@
+{
+  "contractFamily": "clc-host-enrollment-v1",
+  "schemaVersion": 1,
+  "recordKind": "deployment-configuration",
+  "applicationId": "ssrs-web",
+  "targetId": "ssrs-web-dev",
+  "environmentName": "DEV",
+  "runtimeEnvironment": "Production",
+  "siteName": "ExampleSsrsWeb",
+  "applicationPoolName": "ExampleSsrsWeb",
+  "applicationRoot": "C:\\ProgramData\\clc-ssrs-web\\Application",
+  "operationalConfigPath": "C:\\ProgramData\\clc-ssrs-web\\Config\\application.json",
+  "dataProtectionRoot": "C:\\ProgramData\\clc-ssrs-web\\Keys",
+  "artifactInboxRoot": "C:\\ProgramData\\clc-ssrs-web\\Inbox",
+  "runtimeIdentitySid": "S-1-5-21-1-2-3-2001",
+  "runtimeAccountName": "EXAMPLE\\svc-ssrs-web",
+  "readinessUri": "https://ssrs-web.example.invalid/health/ready",
+  "enrollmentRoot": "C:\\ProgramData\\CLC\\Deployment\\Enrollment"
+}

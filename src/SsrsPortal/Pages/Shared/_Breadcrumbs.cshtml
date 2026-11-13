@@ -1,0 +1,33 @@
+@model SsrsPortal.Core.BreadcrumbNavigation
+<nav class="breadcrumbs" aria-label="Report location">
+    <ol class="breadcrumb-list">
+        @for (var i = 0; i < Model.Items.Length; i++)
+        {
+            @if (i == 1 && Model.Items.Length > 3)
+            {
+                <li class="breadcrumb-more" hidden>
+                    <span class="breadcrumb-separator" aria-hidden="true"> &gt; </span>
+                    <details>
+                        <summary aria-label="More parent folders" title="More parent folders">…</summary>
+                        <ol aria-label="Other parent folders"></ol>
+                    </details>
+                </li>
+            }
+            var item = Model.Items[i];
+            <li class="@(item.IsCurrent ? "breadcrumb-current" : "breadcrumb-folder")">
+                @if (i > 0)
+                {
+                    <span class="breadcrumb-separator" aria-hidden="true"> &gt; </span>
+                }
+                @if (item.IsCurrent)
+                {
+                    <span aria-current="page" title="@item.Name">@item.Name</span>
+                }
+                else
+                {
+                    <a asp-page="/Index" asp-all-route-data="item.Route" title="@item.Name">@item.Name</a>
+                }
+            </li>
+        }
+    </ol>
+</nav>

@@ -1,0 +1,6 @@
+@page
+@model ErrorModel
+@{ ViewData["Title"] = "Request unavailable"; }
+<h1>Report request unavailable</h1>
+<p>The report service is temporarily unavailable. Try again or contact support with this reference: @Model.RequestId</p>
+<a asp-page="/Index">Return to report library</a>

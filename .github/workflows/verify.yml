@@ -1,0 +1,236 @@
+name: Verify synthetic SSRS portal
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  windows-deployment-compatibility:
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+      (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.303
+      - run: dotnet restore SsrsPortal.slnx --locked-mode
+      - run: dotnet build SsrsPortal.slnx -c Release --no-restore
+      - run: dotnet test tests/SsrsPortal.SubscriptionTests -c Release --no-build --filter "FullyQualifiedName~DeploymentCompatibility|FullyQualifiedName~ProgramDeploymentIntegration" --logger "console;verbosity=minimal"
+      - name: Verify trusted DEV workflow boundaries with synthetic host observations
+        shell: pwsh
+        run: ./scripts/release/Test-DevDeployment.ps1
+      - name: Qualify ordinary and CLC Release publish web.config policies
+        shell: pwsh
+        run: |
+          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --no-restore --output artifacts/ci-ordinary-publish
+          if ($LASTEXITCODE) { throw 'Release.OrdinaryPublishFailed' }
+          ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-ordinary-publish
+          dotnet restore src/SsrsPortal/SsrsPortal.csproj --locked-mode --runtime win-x64 -p:ClcIdentityKind=Release
+          if ($LASTEXITCODE) { throw 'Release.RestoreFailed' }
+          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcReleaseId=ssrs-web-ci-qualification -p:ClcSourceCommit=1111111111111111111111111111111111111111 -p:ClcIdentityKind=Release --output artifacts/ci-release-publish
+          if ($LASTEXITCODE) { throw 'Release.PublishFailed' }
+          ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-release-publish
+          ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish
+  mock:
+    # Defense in depth. GitHub's private-repository/fork and runner-group policies
+    # must also deny untrusted code; a submitted workflow can change this guard.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+      (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
+    runs-on: clc-linux
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Use fresh job-local tool directories
+        shell: bash
+        run: |
+          echo "DOTNET_INSTALL_DIR=$RUNNER_TEMP/dotnet" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ssrs-playwright" >> "$GITHUB_ENV"
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.303
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Runner and toolchain preflight
+        shell: bash
+        run: |
+          . /etc/os-release
+          printf 'OS: %s\nRunner: %s (%s/%s)\n' "$PRETTY_NAME" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          printf '.NET SDK: '; dotnet --version
+          printf 'PowerShell: '; pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          printf 'Node: '; node --version
+          printf 'npm: '; npm --version
+      - name: Reject tracked generated artifacts
+        run: |
+          node --test scripts/check-generated-artifacts.test.cjs
+          node scripts/check-generated-artifacts.cjs
+      - name: Check JavaScript syntax
+        run: |
+          for file in scripts/*.cjs tests/browser/*.cjs src/SsrsPortal/wwwroot/js/*.js; do
+            node --check "$file"
+          done
+      - name: Check PowerShell syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath scripts -Filter *.ps1 -Recurse -File | ForEach-Object {
+            $syntaxErrors = $null
+            $null = [Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$syntaxErrors)
+            if ($syntaxErrors) { throw ($syntaxErrors | Out-String) }
+          }
+      - run: dotnet restore SsrsPortal.slnx --locked-mode
+      - run: dotnet build SsrsPortal.slnx -c Release --no-restore
+      - run: dotnet test SsrsPortal.slnx -c Release --no-build --logger "console;verbosity=minimal"
+        env:
+          # Failed-startup fixtures need no watchers for the default JSON sources
+          # the portal discards before loading its non-reloading external file.
+          # Keep every assertion while avoiding the runner's inotify limit.
+          DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE: 'false'
+      - name: Verify Clc.Configuration operational publish guard
+        shell: pwsh
+        run: ./scripts/Test-ConfigurationPublishGuard.ps1
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~FileLogging" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~ExternalConfiguration" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Breadcrumb|FullyQualifiedName~CatalogNavigation|FullyQualifiedName~Workspace|FullyQualifiedName~Parameter" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Soap|FullyQualifiedName~Diagnostics|FullyQualifiedName~LogHygiene" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~CatalogMonitor" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~CatalogCache|FullyQualifiedName~CatalogMeasurement|FullyQualifiedName~SsrsDelegation|FullyQualifiedName~GlobalBlocklist|FullyQualifiedName~Execution|FullyQualifiedName~Authentication|FullyQualifiedName~Security" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Branding" --logger "console;verbosity=minimal"
+      - run: dotnet test tests/SsrsPortal.Tests/SsrsPortal.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Toggle|FullyQualifiedName~HtmlSafety" --logger "console;verbosity=minimal"
+      - run: dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --no-build --no-restore -o artifacts/publish
+      - run: ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/publish
+        shell: pwsh
+      - name: Verify separate subscription administrative artifact
+        shell: pwsh
+        run: |
+          $null=./scripts/release/New-SubscriptionSetupArtifact.ps1 -OutputPath (Join-Path $PWD 'artifacts/administrative-setup.zip') -SourceCommit $env:GITHUB_SHA
+          ./scripts/release/Test-SubscriptionPublish.ps1 -PublishDirectory artifacts/publish -AdministrationArchive artifacts/administrative-setup.zip
+          ./scripts/release/Test-ReleasePackaging.ps1
+          ./scripts/release/Test-DevDeployment.ps1
+      - name: Verify published example and exclude operational configuration/logging fixtures
+        shell: pwsh
+        run: |
+          $examplePath = Join-Path (Resolve-Path artifacts/publish).Path 'application.Example.json'
+          if (!(Test-Path -LiteralPath $examplePath -PathType Leaf) -or
+              (Get-FileHash -LiteralPath $examplePath).Hash -cne (Get-FileHash -LiteralPath src/SsrsPortal/application.Example.json).Hash) {
+            throw 'The published bootstrap example must match the reviewed source.'
+          }
+          $unexpected = Get-ChildItem artifacts/publish -Recurse -File | Where-Object {
+            $_.Name -like 'appsettings*.json' -or ($_.Name -like 'application*.json' -and $_.FullName -cne $examplePath) -or $_.Extension -eq '.log' -or
+            $_.FullName -match '[/\\](Logs|TestResults|Fixtures)[/\\]' -or $_.Name -like '*Tests*'
+          }
+          if ($unexpected) { throw 'Operational configuration, logs and test fixtures must not be published.' }
+          foreach ($assembly in @('NLog.dll', 'NLog.Extensions.Logging.dll')) {
+            if (!(Test-Path -LiteralPath (Join-Path artifacts/publish $assembly) -PathType Leaf)) { throw "Missing published logging assembly: $assembly" }
+          }
+      - run: dotnet list SsrsPortal.slnx package --vulnerable --include-transitive
+      - run: npm ci
+      - run: npm audit --audit-level=low
+      - name: Install the locked Playwright Chromium browsers
+        # Chromium shared libraries/fonts are part of the standardized Ubuntu
+        # runner image. Browsers are downloaded into this job's temporary path.
+        # The harness launches Chromium before starting the portal
+        # and reports a missing browser or native dependency as setup failure.
+        run: npx --no-install playwright install chromium
+      - name: Complete synthetic browser and accessibility suite
+        run: ./scripts/Test-Portal.ps1
+        shell: pwsh
+        env:
+          PORTAL_BROWSER_EXECUTABLE: ''
+          PORTAL_BROWSER_SUITE: ''
+      - run: git diff --check
+      - name: Subscription UI, delivery doubles and accessibility
+        run: ./scripts/Test-Portal.ps1
+        shell: pwsh
+        env:
+          PORTAL_BROWSER_EXECUTABLE: ''
+          PORTAL_BROWSER_SUITE: subscriptions
+      - name: Cold-start branding and catalog root breadcrumbs through real HTTPS and Razor
+        run: dotnet run --project tests/SsrsPortal.BrowserChecks -c Release --no-build -- .
+        env:
+          PORTAL_BROWSER_EXECUTABLE: ''
+      - name: Retain synthetic failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/browser-runner/**/*.log
+            artifacts/browser/**/*.png
+            artifacts/browser/choice-performance.json
+            artifacts/browser/multi-select-performance.json
+            artifacts/browser/single-select-performance.json
+            artifacts/browser/expansion-verification.json
+            artifacts/browser/report-layout-verification.json
+            artifacts/browser/breadcrumb*.json
+            artifacts/browser/compact-parameter-verification.json
+            artifacts/browser/parameter-validation-verification.json
+            artifacts/browser/execution-status-verification.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Retain searchable single-select acceptance evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-select-verification-${{ github.run_id }}
+          path: |
+            artifacts/browser/single-*.png
+            artifacts/browser/single-select-performance.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain multi-select acceptance evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-select-verification-${{ github.run_id }}
+          path: |
+            artifacts/browser/multi-*.png
+            artifacts/browser/choice-performance.json
+            artifacts/browser/multi-select-performance.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain report expansion acceptance evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-expansion-verification-${{ github.run_id }}
+          path: |
+            artifacts/browser/expansion-*.png
+            artifacts/browser/expansion-verification.json
+            artifacts/browser/report-layout-verification.json
+            artifacts/browser/breadcrumb*.png
+            artifacts/browser/breadcrumb-verification.json
+            artifacts/browser/breadcrumb-root-verification.json
+            artifacts/browser/compact-*.png
+            artifacts/browser/compact-parameter-verification.json
+            artifacts/browser/parameter-validation-verification.json
+            artifacts/browser/execution-status-*.png
+            artifacts/browser/execution-status-verification.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain subscription acceptance evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscription-verification-${{ github.run_id }}
+          path: artifacts/browser/subscription*.png
+          if-no-files-found: error
+          retention-days: 7

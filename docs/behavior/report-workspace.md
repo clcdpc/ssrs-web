@@ -1,0 +1,67 @@
+# SSRS catalog, parameters, and report workspace
+
+This document is the current reference for catalog navigation, parameter resolution, and report execution in the portal. Automated coverage uses synthetic reports, an in-process SOAP service, and browser fixtures. It does not establish live SSRS, IIS, Entra, SQL, PDF fidelity, or staff accessibility acceptance.
+
+## Catalog and navigation
+
+The catalog is discovered from configured `AllowedRoots`. One bounded recursive `ListChildren` call enumerates each visible, unblocked root; `GetProperties(Hidden)` verifies roots and ancestors. Hidden items and descendants of hidden folders stay hidden. Missing, inaccessible, or malformed ancestor metadata fails closed. The shared cache admits visible `Report` and `LinkedReport` entries under a visible folder ancestry. SSRS resolves linked targets when an alias executes; blocking a report does not block its dependencies, so block an alias directly when required.
+
+`ExcludedPrefixes` is the global direct blocklist. Folder prefixes block that folder and descendants on segment boundaries, case-insensitively. No name substring rule hides restored, archived, internal, or system items. A configured root of `/` permits root-level reports; the catalog and link routes still resolve names through the filtered authorized snapshot rather than accepting raw SOAP paths.
+
+On normal catalog entry, the portal opens the only visible root folder automatically only when it is the sole top-level entry. Multiple folders, any root report or linked report, and an empty catalog show **All folders**. Explicit `/?root=true` and `/?folder=` routes open the root. Folder views order tilde-prefixed folders first, then other folders, then reports and linked reports; each group sorts by name using ordinal case-insensitive comparison. A tilde-prefixed report remains in the report group.
+
+Search is global across the accessible catalog, including while browsing a folder. Clearing search returns to the normal catalog entry behavior. Catalog folders, search results, and reports share one breadcrumb. The meaningful single root omits a redundant All folders ancestor; additional root entries retain it. The breadcrumb marks the current location, keeps literal selectable `>` separators, moves intermediate ancestors into a keyboard-operable menu when space is short, and preserves the full accessible label when text is truncated. Selecting and copying the trail yields the displayed labels and literal separators; closed menu items do not leak into copied text. Keyboard opening, navigation, dismissal, and focus recovery after layout changes are covered by browser checks.
+
+## Parameter state, dependencies, and dates
+
+The parameter resolver distinguishes an absent value key (initialization; use SSRS defaults), `[]` (deliberately cleared), `[null]` (null), and `[""]` (blank). In SOAP, null is represented by an omitted optional `Value` element; blank is an included empty `Value` element. Incoming `xsi:nil` and XML Boolean values are parsed according to the SOAP schema; malformed or missing required fields fail instead of becoming false or empty. Literal request/response expectations are documented in the [fixture reference](../../tests/SsrsPortal.Tests/Fixtures/README.md).
+
+Default provenance is retained separately from selected text. A value still marked as default is reevaluated when its parent context changes. A valid manual child selection is preserved; invalid stale choices are removed or shown as validation errors instead of silently changing to another value. Unrelated refreshes preserve selections and provenance. A no-op selection does not trigger a refresh or convert a default into a manual value. Hidden inputs remain server-managed and cannot be injected through public links or client state hints.
+
+Dependent metadata is resolved under the whole-request deadline and cancellation token, with at most `2n + 2` resolution waves after the initial schema request for `n` parameters. It stops safely if metadata does not converge. Values, choices, parameter counts, SOAP traffic, and request bodies retain their configured bounds.
+
+Date defaults, options, and incoming values share one invariant contract:
+
+- ISO date-only, local date/time, seconds, and up to seven fractional digits are accepted. A date-only input means midnight; it does not mean end-of-day.
+- `Z` and explicit offsets through ±14:00 are retained without host-locale or time-zone conversion. The clock text is not shifted to the portal server's time zone.
+- The exact invariant SSRS form `M/d/yyyy h:mm:ss tt` is also accepted for the observed defaults. For example, `9/1/2026 12:00:00 AM` becomes `2026-09-01T00:00:00` and `9/30/2026 11:59:59 PM` becomes `2026-09-30T23:59:59`, without adding an offset.
+- Ambiguous locale-only dates, month-name formats, invalid calendars or offsets, incomplete times, and fractions beyond seven digits are rejected. There is no unrestricted locale parser.
+- Native date/time fields preserve seconds. Offset-bearing or higher precision values use exact ISO text controls where the native local control cannot represent them.
+
+[Known-record date boundary acceptance](../date-parameter-boundary-acceptance.md) remains **open**. A suitable known-record data set is still needed to compare the stock and custom portals with identical inputs, preserve seconds through default/edit/refresh/submit, and confirm the report's inclusive/exclusive behavior at midnight and 23:59:59. Parameter parsing and exact SOAP transmission do not prove report-query filtering. Record expected and actual rows; track any confirmed report/query discrepancy separately. This work is not complete.
+
+## Option controls
+
+The portal loads the complete bounded choice collection; it does not show a truncated first page or silently submit a partial list. The default `MaxOptions` is 5,000 per parameter and the maximum configured value is 10,000. Selection is capped at the lesser of `MaxOptions` and 5,000 values; each value is limited to 2,048 characters and a serialized selection request to 224 KiB. The server and hosting layer retain their independent 256 KiB request bounds. Free-entry multivalue controls show and submit each entry separately.
+
+Choice collections are fetched only when needed and cached for the current dependency context. Their key covers normalized values and labels, unavailable/dependency state, and transitive parent values. Parent changes invalidate a collection even when the returned labels happen to match; changed labels invalidate it too. Unrelated edits and a parameter's own selection do not. Request revisions and cancellation guards reject stale replies even if the transport ignores cancellation. A key mismatch offers **Refresh inputs**; an ordinary loading failure preserves the selection and offers **Retry choices**. The browser does not loop automatically against changing SSRS metadata.
+
+The authorized `POST /api/reports/{id}/options/{parameter}` endpoint returns the full current collection and its context key. The bounded `POST /api/reports/{id}/options/{parameter}/all` endpoint remains supported for compatibility and expands the full collection in one resolution; neither endpoint pages, authorizes raw paths, or bypasses parameter validation.
+
+Single-select choices open a searchable listbox and commit immediately on an explicit click, Enter, or Space. Search is local against the loaded collection. Moving the active option, using arrows/Home/End, typing in search, pressing Escape, clicking outside, or leaving with Tab does not select an unchosen row. The current selection is a no-op: closing retains default provenance, does not refresh dependencies, and does not mark displayed output stale. Null and the explicit empty selection remain separate choices where allowed.
+
+Multi-select checkboxes edit a local typed draft. **(Select All)** is tri-state and always targets the entire valid collection, including choices hidden by search. Closing by the trigger, outside pointer, focus departure, Tab, Escape, another dropdown, parameter collapse, or **View report** commits changed values once. An unchanged draft or edit-and-revert preserves default provenance and does not send a redundant resolution. Internal redraw/disposal cancels pending choice work without committing an obsolete draft. There are no Apply/Cancel buttons or routine count footer. **View report** waits for the latest dependency resolution and validates the committed values before execution. These controls retain keyboard focus, dismissal, and blur regressions in the browser suite.
+
+## Workspace, links, printing, and recovery
+
+Report rows and global search results open a canonical `/report/...` URL made from authorized catalog names. Each path segment is encoded separately; hierarchy separators remain slashes. The route decodes once and rejects empty/trailing segments, traversal, backslashes, disguised separators, malformed percent/UTF-8, and paths over 512 characters. Case/name redirects use exact catalog spelling. Direct URLs use the same roots, hidden ancestry, and blocklist as catalog/API access; they cannot authorize an arbitrary SSRS path.
+
+Query parameter names match SSRS names case-sensitively. Repeated keys carry multiselect values; `:isnull=true` distinguishes null from blank. Boolean values accept `true`/`false` and `1`/`0`. Unsupported controls, duplicate scalars, hidden/unknown names, invalid encodings, and oversized selections produce actionable feedback. Invalid explicit dependent values are not replaced by unrelated defaults.
+
+A bare path or a link containing only the reserved `portal:noExecute` control populates and validates the form without running. A link with real, valid report inputs submits the ordinary authenticated, antiforgery-protected Run form once. The control accepts `true`, `1`, `false`, or `0`, occurs at most once, and is never sent to SOAP. A failed automatic run is not replayed on refresh.
+
+**Copy report link** waits for pending dependency resolution and copies the current visible selections, including edits not yet run. It uses repeated multiselect keys and explicit null notation, retains precision/offset text, and excludes hidden inputs, catalog IDs, execution tokens, authentication, and CSRF state. Invalid or oversized selections leave the clipboard unchanged and show feedback. Clipboard use requires the browser permission.
+
+The canonical path and report query stay in the address. Temporary execution context lives in the current `history.state.ssrsReport` entry and is bound to that location and the server's owner/report checks. Refresh and back/forward can restore the last executed values, default provenance, output, and page while the owner's session is alive; they do not rerun. Expired recovery clears temporary context, repopulates the canonical link, and waits for manual execution. No localStorage, sessionStorage, or authentication-token store is used. Legacy `/Report?id=…` and `/Viewer?token=…` routes retain their current owner-checked compatibility behavior; process-local opaque IDs do not survive a worker restart.
+
+A rerun renders into a staged sandboxed iframe. The current report, page, downloads, and session remain active until the new frame is ready and the protected commit succeeds. A failed run or frame load preserves the old output and releases the pending replacement; an uncertain commit is reconciled before either session is discarded. Paging and all four downloads use the displayed execution. Cancellation clears portal state and interrupts HTTP work, but SSRS may continue server-side execution until its own timeout.
+
+Print uses the active owner-bound execution and the existing PDF renderer to open the complete report inline in a new tab. PDF download remains an attachment. Both paths revalidate catalog membership and synchronization state, enforce the PDF signature, use no-store responses, and retain output/session bounds. Cross-user, stale, expired, or unsynchronized sessions are rejected.
+
+Routine completion uses an accessible polite status announcement; failures are visible assertive feedback with a support reference. The report iframe remains script-disabled and sandboxed. Focus, report and outer-page scroll, cancellation, recovery, and keyboard behavior are covered in the [report expansion reference](report-expand-collapse.md) and synthetic browser suites.
+
+## Acceptance status
+
+Automated .NET, protocol-fixture, and Chromium checks exercise these contracts with synthetic data. They include current root arrangements, global search, copy/clipboard, link autorun and no-run rules, history recovery, dirty parameters, full option collections, stale/canceled responses, accessibility scans, page/resource/download behavior, and session ownership. The canonical commands are in the [README verification section](../../README.md#verification).
+
+Live acceptance remains for actual IIS URL filtering and query limits, installed SSRS defaults/dependencies and boundary data, real output fidelity, PDF rendering, staff keyboard/assistive-technology/zoom review, and real Entra/AD identity and cancellation behavior. A synthetic nonempty export proves only that bytes were produced and MIME/signature checks passed; it does not prove output fidelity. Resource-stream tests prove only the streams returned by their fixtures. A zero-stream result does not establish that a real report has no chart, image, or subreport resources.

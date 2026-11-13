@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetPropertiesResponse xmlns="http://schemas.microsoft.com/sqlserver/reporting/2010/03/01/ReportServer">
+      <Values><Property><Name>Hidden</Name><Value>False</Value></Property></Values>
+    </GetPropertiesResponse>
+  </soap:Body>
+</soap:Envelope>

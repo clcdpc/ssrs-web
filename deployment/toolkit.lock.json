@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "repository": "clcdpc/clc-deployment",
+  "sourceCommit": "a3a94cd26daa583d392f73e99e56872876a88467",
+  "version": "0.1.0-beta.3",
+  "distributionSha256": "7afcf9a22442d205840831b803edba4a46c1684cb00063c78592e16e21aac4b3",
+  "moduleInventorySha256": "e285ea0ae2300d91f30f647dc32ed4e08f4b586e3c3275dd03a6267f91786913",
+  "distributionUri": "https://api.github.com/repos/clcdpc/clc-deployment/releases/assets/744767900",
+  "prerequisite": "Published beta.3 distribution pin verified from the new repository's release manifest, hosted workflow bundle and public asset digest; it authorizes no toolkit installation or application deployment."
+}

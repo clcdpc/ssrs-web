@@ -1,0 +1,1 @@
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><RenderStreamResponse xmlns="http://schemas.microsoft.com/sqlserver/2005/06/30/reporting/reportingservices"><Result>Ym9keXtjb2xvcjpibGFja30=</Result><Encoding>utf-8</Encoding><MimeType>text/css</MimeType></RenderStreamResponse></soap:Body></soap:Envelope>

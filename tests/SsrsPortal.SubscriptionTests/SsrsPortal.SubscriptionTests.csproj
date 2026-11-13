@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.5.2" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.5.2" />
+    <AssemblyMetadata Include="Clc.ApplicationId" Value="ssrs-web" />
+    <AssemblyMetadata Include="Clc.ReleaseId" Value="ssrs-web-test-001" />
+    <AssemblyMetadata Include="Clc.SourceCommit" Value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" />
+    <AssemblyMetadata Include="Clc.IdentityKind" Value="Release" />
+    <ProjectReference Include="../SsrsPortal.Tests/SsrsPortal.Tests.csproj" />
+    <None Include="../../scripts/subscriptions/001-Subscriptions.sql" Link="001-Subscriptions.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/subscriptions/002-Hangfire.sql;../../scripts/subscriptions/003-SubscriptionPermissions.sql" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,40 @@
+@inject TimeProvider SubscriptionTime
+@{
+    var eastern = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    var start = TimeZoneInfo.ConvertTime(SubscriptionTime.GetUtcNow().AddHours(1), eastern).ToString("yyyy-MM-ddTHH:mm");
+    var email = SsrsPortal.Subscriptions.SubscriptionOwner.FromPrincipal(User).UserEmail;
+}
+<dialog id="subscription-editor" aria-labelledby="subscription-heading" class="subscription-dialog" data-initial-start="@start" data-initial-email="@email">
+    <form id="subscription-form">
+        <div class="subscription-heading"><h2 id="subscription-heading">Subscribe to report</h2><button id="subscription-close" type="button" class="quiet" aria-label="Close subscription editor">×</button></div>
+        <p id="subscription-report" class="field-help"></p>
+        <div class="subscription-details">
+            <div class="subscription-name"><label for="subscription-name">Subscription name</label><input id="subscription-name" maxlength="150" required /></div>
+            <div><label for="subscription-to">To</label><input id="subscription-to" autocomplete="off" placeholder="name@example.com; another@example.com" required aria-describedby="subscription-recipient-help" /></div>
+            <div><label for="subscription-cc">Cc</label><input id="subscription-cc" autocomplete="off" /></div>
+            <div><label for="subscription-bcc">Bcc</label><input id="subscription-bcc" autocomplete="off" /></div>
+            <div><label for="subscription-delivery">Delivery</label><select id="subscription-delivery"><option value="attachment">Attachment only</option><option value="link">Link only</option><option value="both">Link and attachment</option></select></div>
+            <div><label for="subscription-format">Attachment format</label><select id="subscription-format"><option value="pdf">PDF</option><option value="xlsx">Excel (XLSX)</option><option value="docx">Word (DOCX)</option><option value="csv">CSV</option></select></div>
+        </div>
+        <p id="subscription-recipient-help" class="field-help">Separate addresses with commas or semicolons. Links require an authorized portal sign-in and run fresh data. Attachments can be opened without portal authentication.</p>
+        <fieldset class="subscription-schedule"><legend>Schedule</legend>
+            <div class="schedule-grid">
+                <div><label for="schedule-kind">Repeat</label><select id="schedule-kind"><option value="once">Once</option><option value="interval">Hourly / minute interval</option><option value="daily">Daily / every N days</option><option value="weekly">Weekly / every N weeks</option><option value="monthDays">Monthly on days</option><option value="monthWeekday">Monthly on a weekday</option><option value="cron">Advanced cron</option></select></div>
+                <div id="schedule-every-field" hidden><label for="schedule-every">Every <span id="schedule-unit">days</span></label><input id="schedule-every" type="number" min="1" max="366" value="1" required /></div>
+                <div><label for="schedule-start">Start date and time</label><input id="schedule-start" type="datetime-local" step="60" required value="@start" /></div>
+                <div><label for="schedule-end">End date and time (optional)</label><input id="schedule-end" type="datetime-local" step="60" /></div>
+                <div class="schedule-zone"><label for="schedule-zone">Time zone</label><select id="schedule-zone"><option value="America/New_York">Eastern Time (US &amp; Canada)</option>@foreach (var zone in TimeZoneInfo.GetSystemTimeZones().Where(z => z.Id != "America/New_York")) { <option value="@zone.Id">@zone.DisplayName</option> }</select></div>
+                <div id="schedule-month-days-field" hidden><label for="schedule-month-days">Days of month</label><input id="schedule-month-days" value="1" placeholder="1, 15, 31" /></div>
+                <div id="schedule-week-field" hidden><label for="schedule-week">Week of month</label><select id="schedule-week"><option value="1">First</option><option value="2">Second</option><option value="3">Third</option><option value="4">Fourth</option><option value="-1">Last</option></select></div>
+                <div id="schedule-weekday-field" hidden><label for="schedule-weekday">Weekday</label><select id="schedule-weekday">@foreach (var day in Enum.GetValues<DayOfWeek>()) { <option value="@((int)day)">@day</option> }</select></div>
+                <div id="schedule-cron-field" class="schedule-zone" hidden><label for="schedule-cron">Cron expression</label><input id="schedule-cron" value="0 8 * * 1-5" aria-describedby="schedule-cron-help" /><p id="schedule-cron-help" class="field-help">Five fields: minute hour day-of-month month weekday. Cron uses its own daylight-saving rules.</p></div>
+            </div>
+            <div id="schedule-weekdays-field" hidden><span id="schedule-weekdays-label">On weekdays</span><div class="schedule-weekdays" role="group" aria-labelledby="schedule-weekdays-label">@foreach (var day in Enum.GetValues<DayOfWeek>()) { <label><input type="checkbox" name="schedule-weekdays" value="@((int)day)" checked="@(day == DayOfWeek.Monday)" /> @day.ToString()[..3]</label> }</div></div>
+            <p id="schedule-summary" class="field-help" aria-live="polite"></p>
+        </fieldset>
+        <fieldset class="subscription-parameter-section"><legend>Report inputs</legend><p class="field-help">Use default reevaluates the report's default each time it runs.</p><div id="subscription-parameter-host" class="parameter-grid" aria-busy="true"></div></fieldset>
+        <p id="subscription-status" class="field-help" role="status" aria-live="polite" tabindex="-1"></p>
+        <button id="subscription-retry-inputs" class="quiet" type="button" hidden>Retry report inputs</button>
+        <div class="subscription-footer"><a asp-page="/Subscriptions">My subscriptions</a><div><button id="subscription-cancel" type="button" class="quiet">Cancel</button><button id="subscription-save" type="submit">Save subscription</button></div></div>
+    </form>
+</dialog>

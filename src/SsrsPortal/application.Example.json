@@ -1,0 +1,71 @@
+{
+  "AllowedHosts": "REPLACE_ME",
+  "Deployment": {
+    // Change for EVERY edit, including secret rotations. Never put secrets in this identifier.
+    "ConfigurationRevision": "REPLACE_ME"
+  },
+  "DataProtection": {
+    "KeyStoreCompatibilityId": "ssrs-web-dpapi-user-v1",
+    "KeyRingPath": "REPLACE_ME"
+  },
+  "Portal": {
+    "UseMock": false,
+    "TestAuth": false,
+    "Diagnostics": {
+      // Promote detailed server failures to Warning when Debug is disabled.
+      "Enabled": false,
+      // Detailed SSRS faults/exceptions are available at the default SsrsPortal Debug level.
+      "DetailedFailuresAtDebug": true,
+      // Development only: requires authenticated, authorized loopback requests. Restart after edits.
+      "ShowDetailsInBrowser": false
+    },
+    "ReportServer": "https://REPLACE_ME/ReportServer",
+    "ReportAccessPolicy": "GlobalBlocklist",
+    "AllowedRoots": [ "/REPLACE_ME" ],
+    "ExcludedPrefixes": [],
+    "CatalogSeconds": 600
+  },
+  "Entra": {
+    "ClientId": "REPLACE_ME",
+    "ClientSecret": "REPLACE_ME",
+    "AllowedTenantIds": [ "REPLACE_ME" ]
+  },
+  "CatalogMonitor": {
+    "Enabled": false,
+    "IntervalSeconds": 30,
+    "ConnectionString": "",
+    "CommandTimeoutSeconds": 5
+  },
+  "Subscriptions": {
+    "Enabled": false,
+    "ConnectionString": "",
+    "PortalBaseUrl": "https://reports.example.invalid",
+    "PostmarkServerToken": "",
+    "From": "reports@example.invalid",
+    "MessageStream": "outbound",
+    "Workers": 2,
+    "ExecutionSeconds": 600,
+    "DeliverySeconds": 60,
+    "MaxRecipients": 20,
+    "MaxSubscriptionsPerOwner": 100,
+    "MaxAttachmentBytes": 6291456,
+    "MaxLinkCharacters": 16000,
+    "MaxAttempts": 3
+  },
+  "Logging": {
+    "File": {
+      "Enabled": true,
+      "Rotation": "Daily",
+      "MaxFileSizeBytes": 52428800,
+      "RetentionDays": 30
+    },
+    "LogLevel": {
+      "Default": "Information",
+      "SsrsPortal": "Debug",
+      "Microsoft": "Warning",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.AspNetCore.Authentication": "Warning",
+      "System.Net.Http.HttpClient": "Warning"
+    }
+  }
+}

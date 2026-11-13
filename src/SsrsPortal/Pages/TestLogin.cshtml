@@ -1,0 +1,5 @@
+@page
+@model TestLoginModel
+@{ ViewData["Title"] = "Synthetic sign-in"; }
+<section class="login panel"><p class="eyebrow">ISOLATED DEVELOPMENT</p><h1>Synthetic staff sign-in</h1><p>This local demonstration uses invented reports and identities.</p>
+<form method="post"><label for="profile">Test identity</label><select id="profile" name="Profile"><option value="staff-one">Synthetic staff one</option><option value="staff-two">Synthetic staff two</option><option value="staff-other-tenant">Staff in second approved tenant</option><option value="role-overage">Staff role with group overage</option><option value="outsider">Missing ReportViewer (denied)</option><option value="old-group">Group without ReportViewer (denied)</option><option value="overage">Group overage without ReportViewer (denied)</option><option value="unknown-tenant">Unknown tenant with ReportViewer (denied)</option></select><button type="submit">Sign in to demonstration</button></form></section>

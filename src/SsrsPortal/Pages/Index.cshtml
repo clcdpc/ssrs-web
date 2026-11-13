@@ -1,0 +1,40 @@
+@page
+@model IndexModel
+@{ ViewData["Title"] = "Catalog"; ViewData["MainClass"] = "catalog-main"; ViewData["Breadcrumbs"] = Model.Breadcrumbs; }
+<form class="catalog-search" method="get" role="search">
+    <label class="visually-hidden" for="q">Search available reports</label>
+    <div class="inline"><input id="q" name="q" type="search" value="@Model.Q" maxlength="100" placeholder="Search reports" /><button type="submit">Search</button></div>
+    @if (Model.Searching)
+    {
+        <a class="clear-search" asp-page="/Index">Clear search</a>
+    }
+</form>
+<ul class="catalog-list" aria-label="Folders and reports">
+    @foreach (var entry in Model.Entries)
+    {
+        <li>
+            <a class="catalog-row" href="@(entry.Type == "Folder" ? Url.Page("/Index", new { folder = entry.Id }) : entry.ReportUrl)">
+                <svg class="catalog-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false">
+                    @if (entry.Type == "Folder")
+                    {
+                        <path d="M3 6h7l2 2h9v12H3z M3 6V4h7l2 2" />
+                    }
+                    else
+                    {
+                        <path d="M6 3h8l4 4v14H6z M14 3v5h4 M9 12h6 M9 16h6" />
+                    }
+                </svg>
+                <span class="visually-hidden">@(entry.Type == "Folder" ? "Folder: " : entry.Type == "LinkedReport" ? "Linked report: " : "Report: ")</span>
+                <span class="catalog-name">@entry.Name</span>
+                @if (entry.Type == "LinkedReport")
+                {
+                    <span class="catalog-kind" aria-hidden="true">Linked</span>
+                }
+            </a>
+        </li>
+    }
+</ul>
+@if (Model.Entries.Length == 0)
+{
+    <p class="notice" role="status">@(Model.Searching ? "No available reports match this search. Try another report name." : "No reports are available in this folder.")</p>
+}

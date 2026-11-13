@@ -1,0 +1,41 @@
+# .NET build, publish, test and browser artifacts
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+**/TestResults/
+coverage/
+playwright-report/
+test-results/
+node_modules/
+**/.playwright/
+# Generated documentation and browser screenshots
+docs/*-screenshots/
+docs/**/screenshots/
+# Editors and machine state
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+# Private/local settings and credentials
+**/application.json
+**/deployment.json
+**/appsettings.Local.json
+**/appsettings.*.local.json
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+secrets/
+# Generated content must not become source
+*.trx
+*.coverage
+*.coveragexml
+*.log
+reports-output/
+tmp/
+

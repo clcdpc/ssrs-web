@@ -1,0 +1,4 @@
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetItemParametersResponse xmlns="http://schemas.microsoft.com/sqlserver/reporting/2010/03/01/ReportServer"><Parameters>
+  <ItemParameter><Name>beginDate</Name><ParameterTypeName>DateTime</ParameterTypeName><Prompt>beginDate</Prompt><PromptUser>true</PromptUser><DefaultValues><Value>9/1/2026 12:00:00 AM</Value></DefaultValues><ParameterStateName>HasValidValue</ParameterStateName></ItemParameter>
+  <ItemParameter><Name>endDate</Name><ParameterTypeName>DateTime</ParameterTypeName><Prompt>endDate</Prompt><PromptUser>true</PromptUser><DefaultValues><Value>9/30/2026 11:59:59 PM</Value></DefaultValues><ParameterStateName>HasValidValue</ParameterStateName></ItemParameter>
+</Parameters></GetItemParametersResponse></soap:Body></soap:Envelope>

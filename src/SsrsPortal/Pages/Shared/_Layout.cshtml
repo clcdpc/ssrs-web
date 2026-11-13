@@ -1,0 +1,62 @@
+@inject SsrsPortal.Services.SsrsBrandingService Branding
+@inject SsrsPortal.Subscriptions.SubscriptionOptions Subscriptions
+@inject Clc.Deployment.AspNetCore.ClcApplicationIdentity DeploymentIdentity
+@using SsrsPortal.Configuration
+@{
+    var branding = User.Identity?.IsAuthenticated == true ? await Branding.GetInitialSnapshotAsync(Context.RequestAborted) : null;
+}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] · Staff reports</title>
+    <link rel="icon" type="image/x-icon" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256" href="~/favicon.ico" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    @if (branding?.Background != null)
+    {
+        <link rel="stylesheet" href="~/branding/@branding.Version/theme.css" />
+    }
+    <script src="~/js/site.js" asp-append-version="true" defer></script>
+    @if (Subscriptions.Enabled)
+    {
+        <link rel="stylesheet" href="~/css/subscriptions.css" asp-append-version="true" />
+        <script src="~/js/subscriptions.js" asp-append-version="true" defer></script>
+    }
+</head>
+<body class="@(ViewData["ReportName"] != null ? "report-workspace" : null)">
+    <a class="skip" href="#main">Skip to content</a>
+    @{ var reportName = ViewData["ReportName"] as string; var breadcrumbs = ViewData["Breadcrumbs"] as SsrsPortal.Core.BreadcrumbNavigation; }
+    <header class="shell-header @(breadcrumbs != null ? "workspace-header" : "")">
+        <a class="brand" asp-page="/Index" aria-label="Staff reports">
+            @if (branding?.Logo != null)
+            {
+                <img class="brand-logo" src="~/branding/@branding.Version/logo.png" alt="" />
+            }
+            <span class="brand-fallback" hidden="@(branding?.Logo != null)"><span class="brand-mark" aria-hidden="true">R</span> Staff reports</span>
+        </a>
+        @if (breadcrumbs != null)
+        {
+            <partial name="_Breadcrumbs" model="breadcrumbs" />
+        }
+        @if (DeploymentIdentity.IsRelease || User.Identity?.IsAuthenticated == true)
+        {
+            <div class="account">
+                @if (DeploymentIdentity.IsRelease)
+                {
+                    <a href="https://github.com/clcdpc/ssrs-web/tree/@DeploymentIdentity.SourceCommit" aria-label="Source code for this release under AGPL-3.0-only" rel="noopener noreferrer">Source (AGPL)</a>
+                }
+                @if (User.Identity?.IsAuthenticated == true)
+                {
+                    @if (Subscriptions.Enabled) { <a asp-page="/Subscriptions">My subscriptions</a> }<span>@User.Identity.Name</span><form method="post" action="/signout">@Html.AntiForgeryToken()<button class="quiet" type="submit">Sign out</button></form>
+                }
+            </div>
+        }
+    </header>
+    <main id="main" class="@ViewData["MainClass"]">@RenderBody()</main>
+    @if (reportName == null)
+    {
+        <footer>Reports are visible only when approved for staff access. Contact support with the reference shown if a request fails.</footer>
+    }
+</body>
+</html>

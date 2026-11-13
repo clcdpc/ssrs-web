@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RuntimeIdentifiers Condition="'$(MSBuildProjectName)' == 'SsrsPortal' Or '$(MSBuildProjectName)' == 'SsrsPortal.Mock'">win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+</Project>

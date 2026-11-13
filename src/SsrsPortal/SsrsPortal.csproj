@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SsrsPortal.Mock\SsrsPortal.Mock.csproj" Condition="'$(ClcIdentityKind)' != 'Release'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Clc.Configuration" Version="[0.1.0-beta.4]" />
+    <PackageReference Include="Clc.Deployment.AspNetCore" Version="[0.1.0-beta.3]" />
+    <PackageReference Include="AngleSharp" Version="1.8.4" />
+    <PackageReference Include="Cronos" Version="0.13.0" />
+    <PackageReference Include="Dapper" Version="2.1.89" />
+    <PackageReference Include="Hangfire.AspNetCore" Version="1.8.25" />
+    <PackageReference Include="Hangfire.SqlServer" Version="1.8.25" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageReference Include="Microsoft.IdentityModel.Validators" Version="8.16.0" />
+    <PackageReference Include="NLog" Version="6.2.2" />
+    <PackageReference Include="NLog.Extensions.Logging" Version="6.2.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="application*.json;appsettings*.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <Content Update="application.Example.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="web.clc-release.config" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <Content Update="packages*.lock.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <None Include="../../LICENSE" Link="LICENSE" TargetPath="LICENSE" CopyToPublishDirectory="Always" />
+    <None Include="../../COPYRIGHT.md" Link="COPYRIGHT.md" TargetPath="COPYRIGHT.md" CopyToPublishDirectory="Always" />
+    <None Include="../../BINARY-DISTRIBUTION-NOTICE.md" Link="BINARY-DISTRIBUTION-NOTICE.md" TargetPath="BINARY-DISTRIBUTION-NOTICE.md" CopyToPublishDirectory="Always" />
+    <EmbeddedResource Include="Services\Read-SsrsCatalogSnapshot.sql" LogicalName="SsrsPortal.ReadSsrsCatalogSnapshot.sql" />
+    <InternalsVisibleTo Include="SsrsPortal.Tests" />
+    <InternalsVisibleTo Include="SsrsPortal.SubscriptionTests" />
+    <InternalsVisibleTo Include="SsrsPortal.BrowserChecks" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Identity is compiled before packaging; local/test builds cannot qualify as releases. -->
+    <ClcReleaseId Condition="'$(ClcReleaseId)' == ''">synthetic-local</ClcReleaseId>
+    <ClcSourceCommit Condition="'$(ClcSourceCommit)' == ''">0000000000000000000000000000000000000000</ClcSourceCommit>
+    <ClcIdentityKind Condition="'$(ClcIdentityKind)' == ''">Synthetic</ClcIdentityKind>
+    <DefineConstants Condition="'$(ClcIdentityKind)' == 'Release'">$(DefineConstants);CLC_RELEASE</DefineConstants>
+    <NuGetLockFilePath Condition="'$(ClcIdentityKind)' == 'Release'">packages.release.lock.json</NuGetLockFilePath>
+    <!-- Preserve the IIS grace for normal publishes; remove it only for the toolkit Release policy. -->
+    <CustomTransformFileName Condition="'$(ClcIdentityKind)' == 'Release' and '$(CustomTransformFileName)' == ''">web.clc-release.config</CustomTransformFileName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="Clc.ApplicationId" Value="ssrs-web" />
+    <AssemblyMetadata Include="Clc.ReleaseId" Value="$(ClcReleaseId)" />
+    <AssemblyMetadata Include="Clc.SourceCommit" Value="$(ClcSourceCommit)" />
+    <AssemblyMetadata Include="Clc.IdentityKind" Value="$(ClcIdentityKind)" />
+  </ItemGroup>
+
+</Project>
