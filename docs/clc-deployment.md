@@ -37,7 +37,7 @@ Deployed builds require compiled `ClcIdentityKind=Release`, unique `ClcReleaseId
 3. [Get-ReleaseToolkit.ps1](../scripts/release/Get-ReleaseToolkit.ps1) verifies the whole archive before extraction or verifier execution, then checks source/version/inventory. Optional `CLC_TOOLKIT_READ_TOKEN` is read-only and sent only to `api.github.com`, never the CDN.
 4. `New-PortalRelease.ps1` uses the authenticated toolkit's `New-ClcRelease` and `Test-ClcRelease`, checks publish policy and reads compiled identity without executing the DLL.
 
-The producer has no DEV/IIS deployment authority. Ordinary CI stays on `clc-linux` for Linux/browser checks while private, with trusted-contributor admission and runner-group restrictions; Windows compatibility stays GitHub-hosted. Switch Linux to hosted only at public cutover.
+The producer has no DEV/IIS deployment authority. Ordinary Linux/browser CI uses GitHub-hosted `ubuntu-latest` with trusted-contributor admission and installs Chromium's native dependencies through the locked Playwright package; Windows compatibility stays GitHub-hosted. Privileged DEV runner admission and activation remain separately gated below.
 
 | Artifact | Contents |
 | --- | --- |

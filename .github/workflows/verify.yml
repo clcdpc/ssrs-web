@@ -45,14 +45,14 @@ jobs:
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-release-publish
           ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish
   mock:
-    # Defense in depth. GitHub's private-repository/fork and runner-group policies
-    # must also deny untrusted code; a submitted workflow can change this guard.
+    # Defense in depth. Repository protections must also control untrusted
+    # workflow changes; a submitted workflow can change this guard.
     if: >-
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
       (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
-    runs-on: clc-linux
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -144,12 +144,12 @@ jobs:
       - run: dotnet list SsrsPortal.slnx package --vulnerable --include-transitive
       - run: npm ci
       - run: npm audit --audit-level=low
-      - name: Install the locked Playwright Chromium browsers
-        # Chromium shared libraries/fonts are part of the standardized Ubuntu
-        # runner image. Browsers are downloaded into this job's temporary path.
+      - name: Install locked Playwright Chromium and native dependencies
+        # Install shared libraries/fonts on the GitHub-hosted Ubuntu runner.
+        # Browsers are downloaded into this job's temporary path.
         # The harness launches Chromium before starting the portal
         # and reports a missing browser or native dependency as setup failure.
-        run: npx --no-install playwright install chromium
+        run: npx --no-install playwright install --with-deps chromium
       - name: Complete synthetic browser and accessibility suite
         run: ./scripts/Test-Portal.ps1
         shell: pwsh

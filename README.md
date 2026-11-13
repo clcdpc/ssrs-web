@@ -20,7 +20,7 @@ npx --no-install playwright install chromium
 pwsh -NoProfile -File ./scripts/Test-Portal.ps1
 ```
 
-The browser runner starts an isolated synthetic portal with temporary configuration and an available HTTPS port, then cleans up. It never uses ProgramData configuration or live Entra/SSRS services. Linux needs Chromium libraries and fonts; CI uses the standardized CLC Ubuntu image.
+The browser runner starts an isolated synthetic portal with temporary configuration and an available HTTPS port, then cleans up. It never uses ProgramData configuration or live Entra/SSRS services. On Linux, use `npx --no-install playwright install --with-deps chromium` to install the required libraries and fonts as CI does.
 
 Use `-Port` or `-BrowserExecutable` to override the runner defaults. Browser selection is: explicit argument, `PORTAL_BROWSER_EXECUTABLE`, Windows Edge if available, then Playwright Chromium. For an already running synthetic portal, use `npm run test:browser`; `PORTAL_BASE_URL` defaults to `https://localhost:7443`.
 
@@ -39,7 +39,7 @@ node scripts/check-generated-artifacts.cjs
 git diff --check
 ```
 
-Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses `clc-linux` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. Defer the Linux runner switch until public cutover; review runner admission and repository protections before changing visibility. The separately protected DEV deployment workflow remains disabled until infrastructure authorizes its privileged runner and host.
+Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The separately protected DEV deployment workflow remains disabled until infrastructure authorizes its privileged runner and host.
 
 ## Run against DEV SSRS
 
