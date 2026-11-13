@@ -130,6 +130,13 @@ function New-BridgeFixture {
     [IO.File]::Delete($oldTarget)
     $fixture.target.targetId='ssrs-web-dev'; $fixture.target.applicationId='ssrs-web'; $fixture.target.environmentName='DEV'
     $fixture.target.operationalConfigPath=Join-Path $conventionalRoot 'Config/application.json'; $fixture.target.dataProtectionRoot=Join-Path $conventionalRoot 'Keys'
+    # Keep the complete real notice/license inventory inside the toolkit's 240
+    # character path budget, including staging and backup paths. This state is
+    # a sibling of the long upstream workspace, inside our exclusively owned root.
+    $fixture.layout.controlStateRoot=Join-Path $shortRoot 'c'
+    $fixture.policy.controlStateRoot=$fixture.layout.controlStateRoot
+    $fixture.controlRoot=Join-Path $fixture.layout.controlStateRoot $fixture.targetKey
+    [void][IO.Directory]::CreateDirectory($fixture.controlRoot)
     $fixture.policy.dotnetPath=$global:SsrsBridge.dotnet
     Write-TestJson $fixture.layout.policyPath $fixture.policy
     Write-TestJson (Join-Path $fixture.layout.targetCatalogRoot 'ssrs-web-dev.json') $fixture.target
@@ -212,12 +219,9 @@ $global:SsrsBridge=@{process=$null;dotnet=(Get-Command dotnet -CommandType Appli
 $httpHandler=[Net.Http.HttpClientHandler]::new(); $httpHandler.AllowAutoRedirect=$false; $httpHandler.UseCookies=$false
 $global:SsrsBridge.client=[Net.Http.HttpClient]::new($httpHandler); $global:SsrsBridge.client.Timeout=[TimeSpan]::FromSeconds(2)
 try {
-    # Reuse the actual inline OS resolver, without invoking its privileged entry
+    # Reuse the actual shared OS resolver, without invoking its privileged entry
     # point or trusting caller-controlled ProgramData environment variables.
-    $workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-dev.yml'))
-    $start=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-BEGIN'); $end=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-END')
-    if ($start -lt 0 -or $end -le $start) { throw 'Missing workflow function boundary.' }
-    . ([ScriptBlock]::Create([regex]::Replace($workflow.Substring($start,$end-$start),'(?m)^ {10}','')))
+    . (Join-Path $repository 'scripts/release/Deployment.Common.ps1')
     Initialize-SsrsNative
     $programData=[SsrsWorkflow.Native]::ProgramData()
     $programDataLease=[SsrsWorkflow.Native]::Pin($programData,$true)
@@ -381,6 +385,10 @@ try {
             if ($fixture -and $null -eq $global:SsrsBridge.process) {
                 Save-BridgeEvidence $fixture (Join-Path $evidenceRoot 'final-control')
                 Remove-TestWorkspace $fixture.workspace
+                $ownedState=[IO.Path]::GetFullPath((Join-Path $shortRoot 'c'))
+                $ownedPrefix=[IO.Path]::GetFullPath($shortRoot).TrimEnd('\')+'\'
+                if (-not $ownedState.StartsWith($ownedPrefix,[StringComparison]::OrdinalIgnoreCase) -or $ownedState -cne $fixture.layout.controlStateRoot) { throw 'Unsafe synthetic state cleanup.' }
+                if ([IO.Directory]::Exists($ownedState)) { Remove-Item -LiteralPath $ownedState -Recurse -Force }
             }
         } finally {
             $env:TEMP=$previousTemp; $env:TMP=$previousTmp

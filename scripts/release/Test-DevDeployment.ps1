@@ -5,10 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-dev.yml'))
-$start=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-BEGIN')
-$end=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-END')
-if ($start -lt 0 -or $end -le $start) { throw 'Missing actual inline workflow test boundary.' }
-$functions=[regex]::Replace($workflow.Substring($start,$end-$start),'(?m)^ {10}','')
+$functions=[IO.File]::ReadAllText((Join-Path $repository 'scripts/release/Deployment.Common.ps1'))
 $parseErrors=$null; $null=[Management.Automation.Language.Parser]::ParseInput($functions,[ref]$null,[ref]$parseErrors)
 if ($parseErrors) { throw ($parseErrors | Out-String) }
 . ([ScriptBlock]::Create($functions))

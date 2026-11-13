@@ -1,0 +1,120 @@
+name: Deploy verified SSRS Web release
+on:
+  workflow_run:
+    workflows: ['Produce immutable SSRS Web release']
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+jobs:
+  admission:
+    if: github.repository == 'clcdpc/ssrs-web' && github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-2022
+    timeout-minutes: 15
+    outputs:
+      target: ${{ steps.release.outputs.target }}
+      enabled: ${{ steps.activation.outputs.enabled }}
+    steps:
+      # No checkout of the producer, artifact scripts, dependency install or cache.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Independently authenticate producer and exact release
+        id: release
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -File "{0}"
+        env:
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: ./scripts/release/Test-TagReleaseAdmission.ps1
+      - name: Check separate infrastructure activation before elevated routing
+        id: activation
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -File "{0}"
+        env:
+          TARGET: ${{ steps.release.outputs.target }}
+          DEV_ENABLED: ${{ vars.SSRS_DEV_AUTOMATIC_DEPLOYMENT_ENABLED }}
+          DEV_DEPLOYMENT_ENABLED: ${{ vars.SSRS_DEV_DEPLOYMENT_ENABLED }}
+          DEV_ADMISSION: ${{ vars.SSRS_DEV_RUNNER_ADMISSION_READY }}
+          DEV_GROUP: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
+          DEV_LABELS: ${{ vars.SSRS_DEV_RUNNER_LABELS }}
+          PRODUCTION_ENABLED: ${{ vars.SSRS_PRODUCTION_AUTOMATIC_DEPLOYMENT_ENABLED }}
+          PRODUCTION_ADMISSION: ${{ vars.SSRS_PRODUCTION_RUNNER_ADMISSION_READY }}
+          PRODUCTION_GROUP: ${{ vars.SSRS_PRODUCTION_RUNNER_GROUP }}
+          PRODUCTION_LABELS: ${{ vars.SSRS_PRODUCTION_RUNNER_LABELS }}
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:TARGET -ceq 'ssrs-web-dev') {
+              if ($env:DEV_ENABLED -cne 'true' -or $env:DEV_DEPLOYMENT_ENABLED -cne 'true') { Write-Output 'Automatic DEV deployment is disabled.'; exit 0 }
+              $admission=$env:DEV_ADMISSION; $group=$env:DEV_GROUP; $labels=$env:DEV_LABELS
+          } elseif ($env:TARGET -ceq 'ssrs-web-production') {
+              if ($env:PRODUCTION_ENABLED -cne 'true') { Write-Output 'Automatic production deployment is disabled.'; exit 0 }
+              if ($env:PRODUCTION_GROUP -ceq $env:DEV_GROUP) { throw 'Ssrs.SeparateProductionRunnerGroupRequired' }
+              $admission=$env:PRODUCTION_ADMISSION; $group=$env:PRODUCTION_GROUP; $labels=$env:PRODUCTION_LABELS
+          } else { exit 0 }
+          if ($admission -cne 'true' -or [string]::IsNullOrWhiteSpace($group)) { throw 'Ssrs.Prerequisite.RestrictedRunnerGroupRequired' }
+          $parsed=ConvertFrom-Json $labels -NoEnumerate
+          if ($parsed -isnot [array] -or $parsed.Count -eq 0 -or @($parsed | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count) { throw 'Ssrs.Prerequisite.ProvisionedRunnerLabelsRequired' }
+          'enabled=true' | Out-File -LiteralPath $env:GITHUB_OUTPUT -Append -Encoding utf8
+  deploy:
+    needs: admission
+    # Infrastructure MUST admit ONLY this directly defined workflow at
+    # clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master.
+    # A YAML guard or runner label alone cannot protect an elevated runner.
+    if: needs.admission.outputs.enabled == 'true' && github.ref == 'refs/heads/master' && github.ref_protected && (needs.admission.outputs.target == 'ssrs-web-dev' || needs.admission.outputs.target == 'ssrs-web-production')
+    runs-on:
+      group: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_RUNNER_GROUP || vars.SSRS_PRODUCTION_RUNNER_GROUP }}
+      labels: ${{ fromJSON(needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_RUNNER_LABELS || vars.SSRS_PRODUCTION_RUNNER_LABELS || '[]') }}
+    environment: ${{ needs.admission.outputs.target }}
+    concurrency:
+      group: ${{ needs.admission.outputs.target }}
+      cancel-in-progress: false
+    timeout-minutes: 60
+    steps:
+      - name: Load only protected-master deployment code and reauthenticate release
+        id: deployment
+        shell: C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe -NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"
+        env:
+          SSRS_EXPECTED_TARGET: ${{ needs.admission.outputs.target }}
+          SSRS_AUTOMATIC_ENABLED: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_AUTOMATIC_DEPLOYMENT_ENABLED || vars.SSRS_PRODUCTION_AUTOMATIC_DEPLOYMENT_ENABLED }}
+          SSRS_EXTERNAL_RUNNER_ADMISSION: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_RUNNER_ADMISSION_READY || vars.SSRS_PRODUCTION_RUNNER_ADMISSION_READY }}
+          SSRS_AUTHORIZATION_ID: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_HOST_AUTHORIZATION_ID || vars.SSRS_PRODUCTION_HOST_AUTHORIZATION_ID }}
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference='Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_run' -or $env:GITHUB_REF -cne 'refs/heads/master' -or $env:GITHUB_REF_PROTECTED -cne 'true' -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Ssrs.TrustedWorkflowRequired' }
+          $directory=Join-Path $env:RUNNER_TEMP ('ssrs-trusted-deploy-'+[Guid]::NewGuid().ToString('N'))
+          [void][IO.Directory]::CreateDirectory($directory)
+          $handler=[Net.Http.HttpClientHandler]::new(); $handler.AllowAutoRedirect=$false; $handler.UseCookies=$false
+          $client=[Net.Http.HttpClient]::new($handler); $client.Timeout=[TimeSpan]::FromSeconds(60)
+          try {
+              $client.DefaultRequestHeaders.UserAgent.ParseAdd('ssrs-web-trusted-deployment/1')
+              $client.DefaultRequestHeaders.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$env:SSRS_ARTIFACT_READ_TOKEN)
+              foreach ($name in @('TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
+                  $path='scripts/release/'+$name
+                  $uri='https://api.github.com/repos/clcdpc/ssrs-web/contents/'+$path+'?ref='+$env:GITHUB_WORKFLOW_SHA
+                  $response=$client.GetAsync($uri).GetAwaiter().GetResult()
+                  try {
+                      $response.EnsureSuccessStatusCode() | Out-Null
+                      if ($response.Content.Headers.ContentLength -gt 1048576) { throw 'Ssrs.TrustedScriptBound' }
+                      $record=ConvertFrom-Json ($response.Content.ReadAsStringAsync().GetAwaiter().GetResult())
+                      if ($record.type -cne 'file' -or $record.path -cne $path -or $record.encoding -cne 'base64' -or $record.size -gt 1048576) { throw 'Ssrs.TrustedScriptRequired' }
+                      $bytes=[Convert]::FromBase64String($record.content)
+                      $prefix=[Text.Encoding]::UTF8.GetBytes('blob '+$bytes.Length+[char]0)
+                      $hash=[Convert]::ToHexString([Security.Cryptography.SHA1]::HashData([byte[]]($prefix+$bytes))).ToLowerInvariant()
+                      if ($hash -cne $record.sha -or $bytes.Length -ne $record.size) { throw 'Ssrs.TrustedScriptMismatch' }
+                      $stream=[IO.FileStream]::new((Join-Path $directory $name),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+                      try { $stream.Write($bytes); $stream.Flush($true) } finally { $stream.Dispose() }
+                  } finally { $response.Dispose() }
+              }
+          } finally { $client.Dispose(); $handler.Dispose() }
+          & (Join-Path $directory 'Invoke-TagDeployment.ps1')
+          if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain only whitelisted deployment evidence
+        if: always() && steps.deployment.outputs.evidence-path != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ssrs-web-tag-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.deployment.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30

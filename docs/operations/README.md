@@ -8,6 +8,7 @@ These instructions describe host setup and live acceptance; they do not prove de
 - [Subscriptions](subscriptions.md) covers scheduled delivery, recovery and acceptance.
 - The [CLC deployment runbook](../clc-deployment.md) covers release identity, validation, configuration revisions, persistent keys and recovery.
 - The runbook's [SSRS-specific DEV preflight](../clc-deployment.md#ssrs-specific-dev-preflight) and [seven-check pilot](../clc-deployment.md#planned-real-dev-seven-check-pilot) record application gates that generic toolkit enrollment does not establish.
+- [Tag-driven release operations](../clc-deployment.md#tag-driven-automatic-deployment) covers unmerged PR DEV tags, immutable-tag rulesets, protected-master producer admission, separate target activation and the single pending toolkit integration. Automatic DEVWEB and production remain disabled; existing manual DEV qualification still requires its independent exact approval. No standing-authorization compatibility or real-IIS acceptance is established by mocked tests.
 
 ## Host setup
 

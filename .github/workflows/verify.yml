@@ -32,6 +32,9 @@ jobs:
       - name: Verify trusted DEV workflow boundaries with synthetic host observations
         shell: pwsh
         run: ./scripts/release/Test-DevDeployment.ps1
+      - name: Verify tag admission and automatic deployment contracts
+        shell: pwsh
+        run: ./scripts/release/Test-TagDeployment.ps1
       - name: Qualify ordinary and CLC Release publish web.config policies
         shell: pwsh
         run: |

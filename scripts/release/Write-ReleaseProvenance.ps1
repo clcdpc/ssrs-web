@@ -21,6 +21,13 @@ $record=[ordered]@{schemaVersion=1;recordKind='ssrs-web-release-provenance';repo
     artifactId=$ArtifactId;artifactTransportSha256=$digest;innerReleaseSha256=$evidence.innerReleaseSha256;manifestSha256=$evidence.manifestSha256;
     toolkitBuilder=$evidence.toolkitBuilder;moduleInventorySha256=$evidence.moduleInventorySha256;releaseId=$evidence.releaseId;
     sdkVersion=$evidence.sdkVersion;dependencyLockSha256=$evidence.dependencyLockSha256;integrityVerified=$true;deploymentApproval=$false;hostInstallationApproval=$false}
+if ($env:GITHUB_EVENT_NAME -ceq 'push') {
+    . "$PSScriptRoot/TagRelease.Common.ps1"
+    $null=Get-SsrsReleaseTag $env:GITHUB_REF_NAME
+    if ($env:RELEASE_TAG_OBJECT -cnotmatch '^[a-f0-9]{40}$') { Stop-Release 'Release.Tag.IdentityRequired' }
+    $record.releaseTag=$env:GITHUB_REF_NAME
+    $record.tagObjectSha=$env:RELEASE_TAG_OBJECT
+}
 $stream=[IO.FileStream]::new((Assert-ReleasePath $OutputPath),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
 try { $stream.Write([Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Depth 16 -Compress))); $stream.Flush($true) } finally { $stream.Dispose() }
 [pscustomobject]$record
