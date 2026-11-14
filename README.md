@@ -32,6 +32,9 @@ pwsh -NoProfile -File ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDir
 pwsh -NoProfile -File ./scripts/release/New-SubscriptionSetupArtifact.ps1 -OutputPath "$PWD/artifacts/administrative-setup.zip" -SourceCommit (git rev-parse HEAD)
 pwsh -NoProfile -File ./scripts/release/Test-SubscriptionPublish.ps1 -PublishDirectory artifacts/publish -AdministrationArchive artifacts/administrative-setup.zip
 pwsh -NoProfile -File ./scripts/release/Test-ReleasePackaging.ps1
+pwsh -NoProfile -File ./scripts/release/Test-TagDeployment.ps1
+pwsh -NoProfile -File ./scripts/release/Test-ReleaseArchive.ps1
+pwsh -NoProfile -File ./scripts/release/Test-DevDeployment.ps1
 dotnet list SsrsPortal.slnx package --vulnerable --include-transitive
 npm audit --audit-level=low
 node --test scripts/check-generated-artifacts.test.cjs
@@ -40,6 +43,14 @@ git diff --check
 ```
 
 Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The separately protected DEV deployment workflow remains disabled until infrastructure authorizes its privileged runner and host.
+
+## Tagged releases
+
+Push an immutable `vMAJOR.MINOR.PATCH-dev.N` tag at protected-master history or the current head of a trusted same-repository open PR targeting `master`. Successive tags select successive commits. The hosted producer builds and tests the exact source; the protected-master consumer independently verifies it and publishes a GitHub Release. DEV, beta (`-beta.N`) and RC (`-rc.N`) are prereleases; beta/RC never deploy. Stable `vMAJOR.MINOR.PATCH` selects the separately disabled production target. Beta, RC and stable require protected-master history.
+
+For a fresh build of an existing tag, use `gh workflow run release.yml --repo clcdpc/ssrs-web --ref v1.0.0-dev.3`. Branch dispatches are rejected. Existing Release assets remain unchanged; the new Actions artifact transports the current build. Closed historical DEV PRs require independently verified immutable Release evidence.
+
+The [trusted consumer](.github/workflows/deploy-release.yml) archives before automatic DEVWEB (`ssrs-web-dev`) deployment through infrastructure-owned CLC.Deployment standing authorization. **Deployment remains disabled pending compatible toolkit publication/installation and host qualification.** Routine manual deployment dispatch has been removed. See [release rules and activation prerequisites](docs/clc-deployment.md#tag-driven-automatic-deployment).
 
 ## Run against DEV SSRS
 
