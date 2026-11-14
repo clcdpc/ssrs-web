@@ -2,6 +2,7 @@ name: Produce immutable SSRS Web release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 permissions:
   contents: read
   actions: read
@@ -12,7 +13,7 @@ concurrency:
 jobs:
   release:
     # Hosted production only. The master-owned consumer authenticates this producer.
-    if: github.repository == 'clcdpc/ssrs-web' && github.ref_type == 'tag'
+    if: github.repository == 'clcdpc/ssrs-web'
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
@@ -250,7 +251,7 @@ jobs:
           $tag=Get-SsrsReleaseTag $env:GITHUB_REF_NAME
           $target=Resolve-SsrsTag $tag.tag
           if ($target.sourceCommit -cne $env:GITHUB_SHA) { throw 'Release.Tag.SourceMismatch' }
-          $null=Get-SsrsSourceEligibility $tag $target.sourceCommit
+          $null=Get-SsrsSourceEligibility $tag $target.sourceCommit $env:GITHUB_EVENT_NAME
           "RELEASE_TAG_OBJECT=$($target.objectSha)" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Use fresh job-local SDK
         run: '"DOTNET_INSTALL_DIR=$env:RUNNER_TEMP\ssrs-dotnet" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append'
@@ -281,6 +282,7 @@ jobs:
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ordinary-release-publish
           ./scripts/release/Test-ReleasePackaging.ps1 -OrdinaryPublishDirectory artifacts/ordinary-release-publish
           ./scripts/release/Test-TagDeployment.ps1
+          ./scripts/release/Test-ReleaseArchive.ps1
           ./scripts/release/Test-DevDeployment.ps1
           node scripts/check-generated-artifacts.cjs
           if ($LASTEXITCODE) { throw 'Release.GeneratedArtifactPolicyFailed' }

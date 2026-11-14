@@ -8,6 +8,30 @@ permissions:
   actions: read
   pull-requests: read
 jobs:
+  archive:
+    if: github.repository == 'clcdpc/ssrs-web' && github.event.workflow_run.conclusion == 'success' && github.ref == 'refs/heads/master' && github.ref_protected
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    concurrency:
+      group: ssrs-web-archive-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Authenticate job-local packaging PowerShell
+        shell: pwsh
+        run: ./scripts/release/Get-BuildPowerShell.ps1 -Destination "$env:RUNNER_TEMP/ssrs-archive-pwsh"
+      - name: Independently verify and archive the release without replacing assets
+        shell: pwsh
+        env:
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: '& "$env:RUNNER_TEMP/ssrs-archive-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Publish-TagRelease.ps1'
   admission:
     if: github.repository == 'clcdpc/ssrs-web' && github.event.workflow_run.conclusion == 'success'
     runs-on: windows-2022
@@ -56,7 +80,7 @@ jobs:
           if ($parsed -isnot [array] -or $parsed.Count -eq 0 -or @($parsed | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count) { throw 'Ssrs.Prerequisite.ProvisionedRunnerLabelsRequired' }
           'enabled=true' | Out-File -LiteralPath $env:GITHUB_OUTPUT -Append -Encoding utf8
   deploy:
-    needs: admission
+    needs: [archive, admission]
     # Infrastructure MUST admit ONLY this directly defined workflow at
     # clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master.
     # A YAML guard or runner label alone cannot protect an elevated runner.
@@ -78,6 +102,7 @@ jobs:
           SSRS_AUTOMATIC_ENABLED: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_AUTOMATIC_DEPLOYMENT_ENABLED || vars.SSRS_PRODUCTION_AUTOMATIC_DEPLOYMENT_ENABLED }}
           SSRS_EXTERNAL_RUNNER_ADMISSION: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_RUNNER_ADMISSION_READY || vars.SSRS_PRODUCTION_RUNNER_ADMISSION_READY }}
           SSRS_AUTHORIZATION_ID: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_HOST_AUTHORIZATION_ID || vars.SSRS_PRODUCTION_HOST_AUTHORIZATION_ID }}
+          SSRS_STANDING_AUTHORIZATION_ID: ${{ needs.admission.outputs.target == 'ssrs-web-dev' && vars.SSRS_DEV_STANDING_AUTHORIZATION_ID || vars.SSRS_PRODUCTION_STANDING_AUTHORIZATION_ID }}
           SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
         run: |
           Set-StrictMode -Version Latest
@@ -90,7 +115,7 @@ jobs:
           try {
               $client.DefaultRequestHeaders.UserAgent.ParseAdd('ssrs-web-trusted-deployment/1')
               $client.DefaultRequestHeaders.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$env:SSRS_ARTIFACT_READ_TOKEN)
-              foreach ($name in @('TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
+              foreach ($name in @('ReleaseArchive.Common.ps1','TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
                   $path='scripts/release/'+$name
                   $uri='https://api.github.com/repos/clcdpc/ssrs-web/contents/'+$path+'?ref='+$env:GITHUB_WORKFLOW_SHA
                   $response=$client.GetAsync($uri).GetAwaiter().GetResult()

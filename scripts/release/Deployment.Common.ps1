@@ -1,20 +1,11 @@
 #Requires -Version 7.0
-# Shared manual/automatic deployment safeguards. Load only from the trusted workflow commit.
+# Shared automatic deployment and separate administrative safeguards.
+# Load only from the trusted workflow commit.
 $script:SsrsTargetId='ssrs-web-dev'
 $script:SsrsEnvironmentName='DEV'
 # SSRS-DEV-FUNCTIONS-BEGIN
 function Stop-Ssrs([string] $Code) { throw [IO.InvalidDataException]::new($Code) }
 function Assert-SsrsSelector([string] $Id) { if ($Id -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$') { Stop-Ssrs 'Ssrs.InvalidSelector' } }
-function Assert-SsrsContext {
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
-        $env:GITHUB_REF -cne 'refs/heads/master' -or $env:GITHUB_REF_PROTECTED -cne 'true' -or
-        $env:GITHUB_WORKFLOW_REF -cne 'clcdpc/ssrs-web/.github/workflows/deploy-dev.yml@refs/heads/master' -or
-        $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or
-        $env:SSRS_DEV_ENABLED -cne 'true' -or $env:SSRS_EXTERNAL_RUNNER_ADMISSION -cne 'true') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
-    if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6') { Stop-Ssrs 'Ssrs.Prerequisite.PinnedWindowsPowerShellRequired' }
-    Assert-SsrsSelector $env:SSRS_AUTHORIZATION_ID; Assert-SsrsSelector $env:SSRS_RELEASE_APPROVAL_ID
-    if ($env:SSRS_FIRST_CUTOVER -cnotin @('true','false')) { Stop-Ssrs 'Ssrs.InvalidCutoverSelection' }
-}
 function Read-SsrsJson([byte[]] $Bytes) {
     if ($Bytes.Length -eq 0 -or $Bytes.Length -gt 4194304) { Stop-Ssrs 'Ssrs.JsonBound' }
     $text=[Text.UTF8Encoding]::new($false,$true).GetString($Bytes)
@@ -381,7 +372,7 @@ function Assert-SsrsProvenance($Approval,$Repository,$Artifact,$Run,$Jobs) {
         $Artifact.workflow_run.id -ne $p.runId -or $Artifact.workflow_run.repository_id -ne $Repository.id -or $Artifact.workflow_run.head_repository_id -ne $Repository.id -or
         $Artifact.workflow_run.head_branch -cne $Run.head_branch -or $Artifact.workflow_run.head_sha -cne $Approval.sourceCommit -or
         $Run.id -ne $p.runId -or $Run.run_attempt -ne $p.runAttempt -or $Run.head_sha -cne $Approval.sourceCommit -or $Run.head_branch -cne $Artifact.workflow_run.head_branch -or
-        $Run.path -cne '.github/workflows/release.yml' -or -not (($Run.event -ceq 'workflow_dispatch' -and $Run.head_branch -ceq 'master') -or ($Run.event -ceq 'push' -and $Run.head_branch -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(dev|beta|rc)\.([1-9][0-9]*))?$')) -or $Run.status -cne 'completed' -or $Run.conclusion -cne 'success' -or
+        $Run.path -cne '.github/workflows/release.yml' -or $Run.event -cnotin @('push','workflow_dispatch') -or $Run.head_branch -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(dev|beta|rc)\.([1-9][0-9]*))?$' -or $Run.status -cne 'completed' -or $Run.conclusion -cne 'success' -or
         $Run.repository.id -ne $Repository.id -or $Run.head_repository.id -ne $Repository.id -or $Jobs.total_count -gt 100 -or @($Jobs.jobs).Count -ne $Jobs.total_count) { Stop-Ssrs 'Ssrs.ArtifactProvenanceMismatch' }
     $job=@($Jobs.jobs | Where-Object { $_.name -ceq $p.buildJob })
     if ($job.Count -ne 1 -or $job[0].run_id -ne $p.runId -or $job[0].run_attempt -ne $p.runAttempt -or $job[0].head_sha -cne $Approval.sourceCommit -or $job[0].status -cne 'completed' -or $job[0].conclusion -cne 'success') { Stop-Ssrs 'Ssrs.ArtifactProvenanceMismatch' }

@@ -20,11 +20,14 @@ function Invoke-SsrsAutomaticDeployment($Release,[string] $AuthorizationId,$Evid
         if (-not $state.ReadyForDeployment -or $state.HostState -cne 'Ready') { Stop-Ssrs 'Ssrs.AutomaticDeployment.SeparateEnrollmentRequired' }
         $preflight=Open-SsrsApplicationPreflight $bootstrap $AuthorizationId $true
         $context=Open-SsrsAutomaticContext $bootstrap $AuthorizationId $Release
+        $context.standingAuthorizationId=$env:SSRS_STANDING_AUTHORIZATION_ID
         $Evidence.artifactVerification='GitHubTransportAndInstalledToolkitVerified'
         Assert-SsrsEnvironmentNames ([Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Machine).Keys)
         $again=Resolve-SsrsTag $Release.tag
         if ($again.objectSha -cne $Release.tagObjectSha -or $again.sourceCommit -cne $Release.sourceCommit) { Stop-TagRelease 'TagMoved' }
-        $null=Get-SsrsSourceEligibility (Get-SsrsReleaseTag $Release.tag) $Release.sourceCommit
+        $null=Get-SsrsSourceEligibility (Get-SsrsReleaseTag $Release.tag) $Release.sourceCommit $Release.run.event
+        $archive=Get-SsrsCanonicalArchive (Get-SsrsReleaseTag $Release.tag) $again
+        if (-not $archive) { Stop-TagRelease 'ArchiveRequiredBeforeDeployment' }
         if (Test-SsrsTagSuperseded $Release) { $Evidence.outcome='Superseded'; $Evidence.nextAction='None'; return $Evidence }
         $Evidence.deploymentPhase='Unknown'; $Evidence.mutationScope='Unknown'; $Evidence.requiresOperatorIntervention=$true
         $result=Invoke-SsrsToolkitAutomaticDeployment $Release $context
@@ -32,25 +35,39 @@ function Invoke-SsrsAutomaticDeployment($Release,[string] $AuthorizationId,$Evid
         Set-SsrsCompletedDeploymentEvidence $Evidence $result
         return $Evidence
     } finally {
-        if ($context) { Close-SsrsSession $context.session }
-        Close-SsrsSession $preflight
-        if ($bootstrap) { foreach ($lease in $bootstrap.leases) { $lease.Dispose() } }
+        try {
+            if ($context -and $context.ContainsKey('trustedContext')) { & $context.module { param($Context) Close-ClcTrustedContext $Context } $context.trustedContext }
+        } finally {
+            try { if ($context) { Close-SsrsSession $context.session } }
+            finally { try { Close-SsrsSession $preflight } finally { if ($bootstrap) { foreach ($lease in $bootstrap.leases) { $lease.Dispose() } } } }
+        }
     }
 }
 
 function Open-SsrsAutomaticContext($Bootstrap,[string] $AuthorizationId,$Release) {
-    $session=$null
+    $session=$null; $trusted=$null; $module=$null
     try {
         $session=Open-HSession $Bootstrap.configurationPath $AuthorizationId
         Open-HInstalledContext $session
         $module=Import-Module $session.layout.manifestPath -Force -PassThru -Scope Local
+        $selection=& $module {
+            param($TargetId)
+            $context=Open-ClcTrustedContext
+            try {
+                $target=Read-ClcProtectedTarget $context $TargetId
+                $null=Add-ClcProtectedPathPin $context $target.record.artifactInboxRoot -Directory -Mutable -RuntimeSid $target.record.runtimeIdentitySid
+                return @{context=$context;target=$target.record}
+            } catch { Close-ClcTrustedContext $context; throw }
+        } $Release.targetId
+        $trusted=$selection.context
+        if (-not (Test-ClcValueEqual $selection.target (Get-HTarget $session.configuration))) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
         $verified=& $module { param($Path) Test-ClcRelease -ArchivePath $Path } $Release.archivePath
         $p=$Release.provenance
         if ($verified.integrityVerified -ne $true -or $verified.authorizedForDeployment -ne $false -or $verified.applicationId -cne 'ssrs-web' -or
             $verified.releaseId -cne $p.releaseId -or $verified.sourceCommit -cne $Release.sourceCommit -or $verified.archiveSha256 -cne $p.innerReleaseSha256 -or
             $verified.manifestSha256 -cne $p.manifestSha256) { Stop-Ssrs 'Ssrs.ReleaseInspectionMismatch' }
-        return @{bootstrap=$Bootstrap;authorizationId=$AuthorizationId;session=$session;module=$module}
-    } catch { Close-SsrsSession $session; throw }
+        return @{bootstrap=$Bootstrap;authorizationId=$AuthorizationId;session=$session;module=$module;trustedContext=$trusted;target=$selection.target}
+    } catch { if ($trusted) { & $module {param($Context) Close-ClcTrustedContext $Context} $trusted }; Close-SsrsSession $session; throw }
 }
 
 function Invoke-SsrsTagDeploymentEntry {
@@ -63,6 +80,7 @@ function Invoke-SsrsTagDeploymentEntry {
             $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:SSRS_AUTOMATIC_ENABLED -cne 'true' -or
             $env:SSRS_EXTERNAL_RUNNER_ADMISSION -cne 'true') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
         Assert-SsrsSelector $env:SSRS_AUTHORIZATION_ID
+        Assert-SsrsSelector $env:SSRS_STANDING_AUTHORIZATION_ID
         $event=Read-TagJson ([IO.File]::ReadAllBytes($env:GITHUB_EVENT_PATH))
         $release=Get-SsrsAuthenticatedTagRelease $event.workflow_run $env:GITHUB_WORKFLOW_SHA (Join-Path $env:RUNNER_TEMP ([Guid]::NewGuid().ToString('N')))
         if ($release.targetId -cne $env:SSRS_EXPECTED_TARGET) { Stop-TagRelease 'TargetMismatch' }

@@ -4,7 +4,7 @@ param([Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string] $SourceC
 . "$PSScriptRoot/Release.Common.ps1"
 $repositoryRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or
-    $env:GITHUB_EVENT_NAME -cne 'push' -or $env:GITHUB_SHA -cne $SourceCommit -or $env:GITHUB_REF_TYPE -cne 'tag' -or
+    $env:GITHUB_EVENT_NAME -cnotin @('push','workflow_dispatch') -or $env:GITHUB_SHA -cne $SourceCommit -or $env:GITHUB_REF_TYPE -cne 'tag' -or
     $env:GITHUB_WORKFLOW_REF -cne ('clcdpc/ssrs-web/.github/workflows/release.yml@refs/tags/'+$env:GITHUB_REF_NAME) -or
     $env:GITHUB_WORKFLOW_SHA -cne $SourceCommit -or $env:GITHUB_JOB -cne 'release' -or
     $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$') { Stop-Release 'Release.TrustedProducerContextRequired' }

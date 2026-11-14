@@ -102,7 +102,7 @@ try {
         $f=Get-Fixture; $tag=Get-SsrsReleaseTag $f.run.head_branch
         Assert-SsrsTagProducer $f.event $f.run $f.workflow $f.repo $f.jobs $tag $f.run.head_sha
         foreach ($change in @({param($f) $f.run.workflow_id=99}, {param($f) $f.run.path='.github/workflows/other.yml'},
-            {param($f) $f.run.event='workflow_dispatch'}, {param($f) $f.run.head_repository.id=99}, {param($f) $f.run.head_sha='2'*40},
+            {param($f) $f.run.event='pull_request'}, {param($f) $f.run.head_repository.id=99}, {param($f) $f.run.head_sha='2'*40},
             {param($f) $f.run.run_attempt=3}, {param($f) $f.run.head_branch='v1.0.0'}, {param($f) $f.run.conclusion='failure'},
             {param($f) $f.run.status='in_progress'})) {
             $f=Get-Fixture; & $change $f
@@ -113,6 +113,13 @@ try {
             $f=Get-Fixture; & $change $f
             Assert-Fails { Assert-SsrsTagProducer $f.event $f.run $f.workflow $f.repo $f.jobs $tag ('1'*40) } 'BuildJobMismatch'
         }
+    }
+    Test-Case 'Fresh tag dispatch producer uses tag and source identities; branch and mixed events are rejected' {
+        $f=Get-Fixture; $f.run.event='workflow_dispatch'; $f.event.event='workflow_dispatch'; $tag=Get-SsrsReleaseTag $f.run.head_branch
+        Assert-SsrsTagProducer $f.event $f.run $f.workflow $f.repo $f.jobs $tag $f.run.head_sha
+        $f.event.event='push'; Assert-Fails { Assert-SsrsTagProducer $f.event $f.run $f.workflow $f.repo $f.jobs $tag $f.run.head_sha } 'ProducerMismatch'
+        $f.event.event='workflow_dispatch'; $f.run.head_branch='master'; $f.event.head_branch='master'
+        Assert-Fails { Assert-SsrsTagProducer $f.event $f.run $f.workflow $f.repo $f.jobs $tag $f.run.head_sha } 'ProducerMismatch'
     }
     Test-Case 'Successful run cannot admit modified producer workflow supporting script mode or incomplete tree' {
         $f=Get-Fixture; Assert-SsrsProducerFiles $f.tree (Copy-Record $f.tree)
@@ -144,7 +151,7 @@ try {
         $zip=[IO.Compression.ZipFile]::Open($Path,[IO.Compression.ZipArchiveMode]::Create)
         try { $entry=$zip.CreateEntry($Name); $stream=$entry.Open(); try { $stream.Write($Bytes) } finally { $stream.Dispose() } } finally { $zip.Dispose() }
     }
-    $f=Get-Fixture; $script:apiFixture=$f; $script:moveTag=$false; $script:resolveCount=0; $script:corruptTransport=$false; $script:tamperProducer=$false
+    $f=Get-Fixture; $script:apiFixture=$f; $script:moveTag=$false; $script:resolveCount=0; $script:corruptTransport=$false; $script:tamperProducer=$false; $script:currentTrustChanged=$false
     $manifest=[Text.Encoding]::UTF8.GetBytes('{"synthetic":true}')
     $inner=Join-Path $work 'fixture-release.zip'; New-FixtureZip $inner 'manifest.json' $manifest
     $transport=Join-Path $work 'fixture-transport.zip'; New-FixtureZip $transport 'release.zip' ([IO.File]::ReadAllBytes($inner))
@@ -167,6 +174,7 @@ try {
             '/collaborators/' { return @{permission='write'} }
             '/git/trees/' {
                 if ($script:tamperProducer -and $Path.Contains($f.run.head_sha)) { $t=Copy-Record $f.tree; $t.tree[0].sha='a'*40; return $t }
+                if ($script:currentTrustChanged -and $Path.Contains('7'*40)) { $t=Copy-Record $f.tree; $t.tree[0].sha='b'*40; return $t }
                 return $f.tree
             }
             '/artifacts\?' { return @{total_count=2;artifacts=@($f.artifact,$script:proofArtifact)} }
@@ -179,6 +187,22 @@ try {
         $r=Get-SsrsAuthenticatedTagRelease $f.event ('7'*40) (Join-Path $work 'admitted')
         Assert-True ($r.targetId -ceq 'ssrs-web-dev' -and $r.sourceCommit -ceq $f.run.head_sha -and $r.provenance.artifactId -eq 88)
         $script:authenticated=$r
+    }
+    Test-Case 'Complete fresh tag dispatch uses its own verified artifact and exact tagged source' {
+        $f.run.event='workflow_dispatch'; $f.event.event='workflow_dispatch'
+        try {
+            $r=Get-SsrsAuthenticatedTagRelease $f.event ('7'*40) (Join-Path $work 'admitted-dispatch')
+            Assert-True ($r.run.event -ceq 'workflow_dispatch' -and $r.provenance.artifactId -eq 88 -and $r.sourceCommit -ceq $f.run.head_sha)
+        } finally { $f.run.event='push'; $f.event.event='push' }
+    }
+    Test-Case 'Qualified historical rebuild authenticates producer against original master consumer after master changes' {
+        function Get-SsrsSourceEligibility($Tag,$Commit,$Event) { return 'historical-release-9' }
+        function Get-SsrsCanonicalArchive($Tag,$Reference) { return @{metadata=@{consumerCommit=('6'*40)}} }
+        $f.run.event='workflow_dispatch'; $f.event.event='workflow_dispatch'; $script:currentTrustChanged=$true
+        try {
+            $r=Get-SsrsAuthenticatedTagRelease $f.event ('7'*40) (Join-Path $work 'admitted-historical')
+            Assert-True ($r.sourceEligibility -ceq 'historical-release-9')
+        } finally { $f.run.event='push'; $f.event.event='push'; $script:currentTrustChanged=$false }
     }
     Test-Case 'Complete unmerged PR admission rejects a changed producer even when the build succeeds' {
         $f.comparison.status='diverged'
@@ -239,6 +263,7 @@ try {
     function Open-SsrsAutomaticContext($Bootstrap,$Id,$Release) { $script:events.Add('verify'); return @{session=$null} }
     function Resolve-SsrsTag($Tag) { return @{sourceCommit=$script:authenticated.sourceCommit;objectSha=$script:authenticated.tagObjectSha} }
     function Get-SsrsSourceEligibility($Tag,$Commit) { return 'master' }
+    function Get-SsrsCanonicalArchive($Tag,$Reference) { return @{release=@{id=9}} }
     function Test-SsrsTagSuperseded($Release) { return $false }
     function Invoke-SsrsToolkitAutomaticDeployment($Release,$Context) {
         $script:events.Add('authorize-'+$Release.targetId)
@@ -269,6 +294,12 @@ try {
         $script:events.Clear()
         Assert-Fails { Invoke-SsrsAutomaticDeployment $script:authenticated 'auth' (New-SsrsEvidence) } 'ToolkitIntegrationUnavailable'
         Assert-True (($script:events -join ',') -ceq 'bootstrap,inspect,preflight,verify')
+    }
+    Test-Case 'Missing canonical archive cannot reach the standing deployment adapter' {
+        function Get-SsrsCanonicalArchive($Tag,$Reference) { return $null }
+        $script:events.Clear()
+        Assert-Fails { Invoke-SsrsAutomaticDeployment $script:authenticated 'auth' (New-SsrsEvidence) } 'ArchiveRequiredBeforeDeployment'
+        Assert-True (-not @($script:events | Where-Object { $_ -like 'authorize-*' }).Count)
     }
     Test-Case 'Installed-package rejection and post-queue supersession cannot reach the adapter' {
         function Open-SsrsAutomaticContext($Bootstrap,$Id,$Release) { throw 'Ssrs.ReleaseInspectionMismatch' }
@@ -311,18 +342,20 @@ try {
         $r=Copy-Record $script:authenticated; $r.tag='v1.0.0-dev.2'; Assert-True (-not (Test-SsrsTagSuperseded $r))
         $r.tag='v1.0.0'; Assert-True (-not (Test-SsrsTagSuperseded $r))
     }
-    Test-Case 'Workflow boundary keeps production disabled and serializes DEV with the existing manual path' {
+    Test-Case 'Workflow boundary archives before automatic deployment with no manual deployment path' {
         $auto=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-release.yml'))
-        $manual=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-dev.yml'))
+        Assert-True (-not [IO.File]::Exists((Join-Path $repository '.github/workflows/deploy-dev.yml')))
         $producer=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/release.yml'))
         Assert-True ($auto.Contains("if (`$env:PRODUCTION_ENABLED -cne 'true')") -and $auto.Contains('vars.SSRS_PRODUCTION_AUTOMATIC_DEPLOYMENT_ENABLED'))
         Assert-True ($auto.Contains('environment: ${{ needs.admission.outputs.target }}') -and $auto.Contains('group: ${{ needs.admission.outputs.target }}'))
-        Assert-True ($auto.Contains('cancel-in-progress: false') -and $manual.Contains('group: ssrs-web-dev') -and $manual.Contains('cancel-in-progress: false'))
+        Assert-True ($auto.Contains('cancel-in-progress: false') -and $auto.Contains('needs: [archive, admission]'))
+        Assert-True (-not $auto.Contains('workflow_dispatch:') -and $producer.Contains('  workflow_dispatch:') -and -not $producer.Contains('contents: write'))
+        Assert-True ($auto.Contains('contents: write') -and $auto.Contains('Publish-TagRelease.ps1'))
         $privileged=$auto.Substring($auto.IndexOf('  deploy:'))
         Assert-True (-not $privileged.Contains('actions/checkout') -and -not $privileged.Contains('download-artifact') -and -not $privileged.Contains('npm '))
         Assert-True ($privileged.Contains("'?ref='+`$env:GITHUB_WORKFLOW_SHA") -and $privileged.Contains('AutomaticDeployment.Adapter.ps1'))
         Assert-True ($auto.Contains('ref: ${{ github.workflow_sha }}') -and $producer.Contains("tags: ['v*']") -and -not $producer.Contains('secrets.'))
-        Assert-True ($auto.Contains("`$env:PRODUCTION_GROUP -ceq `$env:DEV_GROUP") -and $manual.Contains('inputs.release_approval_id'))
+        Assert-True ($auto.Contains("`$env:PRODUCTION_GROUP -ceq `$env:DEV_GROUP") -and -not $auto.Contains('inputs.'))
     }
     Test-Case 'Actual activation script keeps missing or incomplete gates disabled and rejects shared production runners' {
         $auto=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-release.yml'))

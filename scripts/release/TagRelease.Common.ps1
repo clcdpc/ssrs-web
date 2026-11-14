@@ -6,6 +6,8 @@ function Stop-TagRelease([string] $Code) { throw [IO.InvalidDataException]::new(
 function Get-SsrsReleaseTag([string] $Tag) {
     if ($Tag.Length -gt 128 -or $Tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(dev|beta|rc)\.([1-9][0-9]*))?\z') { Stop-TagRelease 'InvalidVersion' }
     $channel=if ($Matches[4]) { $Matches[4] } else { 'stable' }
+    foreach ($value in @($Matches[1],$Matches[2],$Matches[3])) { if ([Numerics.BigInteger]::Parse($value) -gt 9999) { Stop-TagRelease 'InvalidVersion' } }
+    if ($Matches[5] -and [Numerics.BigInteger]::Parse($Matches[5]) -gt 9998) { Stop-TagRelease 'InvalidVersion' }
     return @{tag=$Tag;channel=$channel;major=$Matches[1];minor=$Matches[2];patch=$Matches[3];sequence=$Matches[5];
         targetId=$(switch ($channel) { dev {'ssrs-web-dev'} stable {'ssrs-web-production'} default {''} })}
 }
@@ -24,14 +26,15 @@ function Invoke-TagGitHub([string] $Path,[string] $OutputPath) {
     $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,('https://api.github.com'+$Path))
     $response=$null; $stream=$null; $destination=$null
     try {
-        $request.Headers.UserAgent.ParseAdd('ssrs-web-tag-admission/1'); $request.Headers.Accept.ParseAdd('application/vnd.github+json')
+        $request.Headers.UserAgent.ParseAdd('ssrs-web-tag-admission/1')
+        $request.Headers.Accept.ParseAdd($(if ($OutputPath -and $Path -cmatch '/releases/assets/[0-9]+$') {'application/octet-stream'} else {'application/vnd.github+json'}))
         $request.Headers.Add('X-GitHub-Api-Version','2022-11-28')
         $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$env:SSRS_ARTIFACT_READ_TOKEN)
         $response=$client.Send($request,[Net.Http.HttpCompletionOption]::ResponseHeadersRead)
         if ($OutputPath -and [int]$response.StatusCode -in @(302,303,307,308)) {
             $location=$response.Headers.Location
             if (-not $location.IsAbsoluteUri -or $location.Scheme -cne 'https' -or $location.Port -ne 443 -or $location.UserInfo -or $location.Fragment -or
-                ($location.Host -cnotmatch '^[a-z0-9-]+\.blob\.core\.windows\.net$' -and $location.Host -cnotmatch '(^|\.)actions\.githubusercontent\.com$')) { Stop-TagRelease 'RedirectRejected' }
+                ($location.Host -cnotmatch '^[a-z0-9-]+\.blob\.core\.windows\.net$' -and $location.Host -cnotmatch '(^|\.)actions\.githubusercontent\.com$' -and $location.Host -cne 'release-assets.githubusercontent.com')) { Stop-TagRelease 'RedirectRejected' }
             $response.Dispose(); $request.Dispose(); $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,$location)
             # A fresh request has no API credentials. Redirects remain disabled.
             $response=$client.Send($request,[Net.Http.HttpCompletionOption]::ResponseHeadersRead)
@@ -103,13 +106,23 @@ function Assert-SsrsTagSource($Tag,[string] $SourceCommit,$Master,$Comparison,$P
     }
     Stop-TagRelease 'EligiblePullRequestRequired'
 }
-function Get-SsrsSourceEligibility($Tag,[string] $SourceCommit) {
+function Get-SsrsSourceEligibility($Tag,[string] $SourceCommit,[string] $EventName='push') {
     $master=Invoke-TagGitHub '/repos/clcdpc/ssrs-web/branches/master'
     $comparison=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/compare/'+$SourceCommit+'...'+$master.commit.sha)
     $pulls=if ($Tag.channel -ceq 'dev' -and $comparison.status -cnotin @('ahead','identical')) { Get-TagPages '/repos/clcdpc/ssrs-web/pulls?state=open&base=master' '' } else { @() }
-    return Assert-SsrsTagSource $Tag $SourceCommit $master $comparison $pulls {
+    try { return Assert-SsrsTagSource $Tag $SourceCommit $master $comparison $pulls {
         param($Name) Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/ref/heads/'+[Uri]::EscapeDataString($Name))
     } { param($Login) Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/collaborators/'+[Uri]::EscapeDataString($Login)+'/permission') }
+    } catch {
+        if ($_.Exception.Message -cne 'Release.Tag.EligiblePullRequestRequired' -or $Tag.channel -cne 'dev' -or $EventName -cne 'workflow_dispatch') { throw }
+        # Only a new tag dispatch can use historical qualification. Initial push
+        # eligibility is unchanged. GitHub immutable releases also lock the tag.
+        $reference=Resolve-SsrsTag $Tag.tag
+        $archive=Get-SsrsCanonicalArchive $Tag $reference
+        if (-not $archive -or $archive.release.immutable -ne $true -or $archive.metadata.sourceCommit -cne $SourceCommit) { Stop-TagRelease 'HistoricalImmutableReleaseRequired' }
+        Assert-SsrsHistoricalArchive $archive $master
+        return 'historical-release-'+$archive.release.id
+    }
 }
 function Assert-SsrsProducerFiles($SourceTree,$TrustedTree) {
     if ($SourceTree.truncated -ne $false -or $TrustedTree.truncated -ne $false) { Stop-TagRelease 'ProducerTreeIncomplete' }
@@ -135,7 +148,7 @@ function Assert-SsrsTagProducer($EventRun,$Run,$Workflow,$Repository,$Jobs,$Tag,
         $Run.head_sha -cne $SourceCommit -or $Run.head_branch -cne $Tag.tag -or $EventRun.head_branch -cne $Tag.tag -or
         $Run.id -lt 1 -or $Run.run_attempt -lt 1 -or $Run.workflow_id -ne $Workflow.id -or $Workflow.path -cne '.github/workflows/release.yml' -or
         $Run.path -cnotin @('.github/workflows/release.yml',('.github/workflows/release.yml@refs/tags/'+$Tag.tag)) -or
-        $Run.event -cne 'push' -or $EventRun.event -cne 'push' -or $Run.status -cne 'completed' -or $EventRun.status -cne 'completed' -or
+        $Run.event -cnotin @('push','workflow_dispatch') -or $EventRun.event -cne $Run.event -or $Run.status -cne 'completed' -or $EventRun.status -cne 'completed' -or
         $Run.conclusion -cne 'success' -or $EventRun.conclusion -cne 'success' -or $Run.repository.id -ne $Repository.id -or
         $EventRun.repository.id -ne $Repository.id -or $Run.head_repository.id -ne $Repository.id -or $EventRun.head_repository.id -ne $Repository.id) { Stop-TagRelease 'ProducerMismatch' }
     $job=@($Jobs | Where-Object { $_.name -ceq 'release' })
@@ -177,12 +190,17 @@ function Get-SsrsAuthenticatedTagRelease($EventRun,[string] $TrustedCommit,[stri
     $workflow=Invoke-TagGitHub '/repos/clcdpc/ssrs-web/actions/workflows/release.yml'
     $jobs=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$run.id+'/attempts/'+$run.run_attempt+'/jobs') 'jobs'
     Assert-SsrsTagProducer $EventRun $run $workflow $repo $jobs $tag $reference.sourceCommit
-    $eligibility=Get-SsrsSourceEligibility $tag $reference.sourceCommit
+    $eligibility=Get-SsrsSourceEligibility $tag $reference.sourceCommit $run.event
     $sourceTree=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/trees/'+$reference.sourceCommit+'?recursive=1')
     # Protected-master history establishes trust in that exact historical
     # producer. Unmerged sources must instead match the consumer's reviewed
     # producer files, so their PR cannot redefine its own admission/build code.
-    $trustedTree=if ($eligibility -ceq 'master') { $sourceTree } else { Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/trees/'+$TrustedCommit+'?recursive=1') }
+    $producerTrustCommit=$TrustedCommit
+    if ($eligibility -clike 'historical-release-*') {
+        $historical=Get-SsrsCanonicalArchive $tag $reference
+        $producerTrustCommit=$historical.metadata.consumerCommit
+    }
+    $trustedTree=if ($eligibility -ceq 'master') { $sourceTree } else { Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/trees/'+$producerTrustCommit+'?recursive=1') }
     Assert-SsrsProducerFiles $sourceTree $trustedTree
     $artifacts=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$run.id+'/artifacts') 'artifacts'
     $suffix=$run.id.ToString()+'-'+$run.run_attempt
@@ -222,8 +240,9 @@ function Test-SsrsTagSuperseded($Release) {
         $target=Resolve-SsrsTag $candidate.tag
         # Unknown relationships fail closed; a valid newer tag may suppress an older
         # deployment even if its build has not completed. The toolkit owns lineage.
-        $null=Get-SsrsSourceEligibility $candidate $target.sourceCommit
+        $null=Get-SsrsSourceEligibility $candidate $target.sourceCommit 'workflow_dispatch'
         return $true
     }
     return $false
 }
+. "$PSScriptRoot/ReleaseArchive.Common.ps1"

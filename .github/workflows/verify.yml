@@ -34,7 +34,9 @@ jobs:
         run: ./scripts/release/Test-DevDeployment.ps1
       - name: Verify tag admission and automatic deployment contracts
         shell: pwsh
-        run: ./scripts/release/Test-TagDeployment.ps1
+        run: |
+          ./scripts/release/Test-TagDeployment.ps1
+          ./scripts/release/Test-ReleaseArchive.ps1
       - name: Qualify ordinary and CLC Release publish web.config policies
         shell: pwsh
         run: |

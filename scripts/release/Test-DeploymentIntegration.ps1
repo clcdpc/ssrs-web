@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory)][string] $ToolkitSourceRoot,
     [Parameter(Mandatory)][string] $ReleaseArchivePath,
     [Parameter(Mandatory)][string] $UpgradeReleaseArchivePath,
-    [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string] $ToolkitSourceCommit
+    [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string] $ToolkitSourceCommit,
+    [string] $StandingReleaseArchivePath,
+    [string] $RebuildReleaseArchivePath
 )
 # Synthetic qualification only. The imported upstream module is unchanged. All
 # IIS/platform/authorization observations are test-owned; no IIS API is called.
@@ -361,6 +363,71 @@ try {
         $after=Get-Content -LiteralPath $fixture.target.operationalConfigPath -Raw | ConvertFrom-Json -AsHashtable
         Assert-Bridge ($after.Deployment.ConfigurationRevision -ceq 'bridge-003') 'recovery retained the explicitly selected new configuration revision'
         foreach ($attempt in $script:backups.Keys) { Assert-BridgeBackup $fixture $script:backups[$attempt].manifest $attempt $script:backups[$attempt].hash }
+    }
+    if ($StandingReleaseArchivePath -or $RebuildReleaseArchivePath) {
+        if (-not $StandingReleaseArchivePath -or -not $RebuildReleaseArchivePath) { throw 'Both standing/rebuild packages are required.' }
+        . (Join-Path $PSScriptRoot 'AutomaticDeployment.Adapter.ps1')
+        function Get-BridgeAdmittedRelease([string] $Path,[string] $Tag='v1.0.0-dev.3') {
+            $path=[IO.Path]::GetFullPath($Path)
+            $v=Test-ClcRelease -ArchivePath $path
+            $m=[Text.Encoding]::UTF8.GetString((Get-TestZipEntries $path | Where-Object name -CEQ 'manifest.json').bytes) | ConvertFrom-Json -AsHashtable
+            return @{tag=$Tag;channel='dev';targetId='ssrs-web-dev';sourceCommit=$m.source.commit;tagObjectSha=$m.source.commit;archivePath=$path;
+                run=@{id=[long]$m.build.runId;run_attempt=[long]$m.build.runAttempt;event='workflow_dispatch'};
+                provenance=@{releaseId=$m.releaseId;sourceCommit=$m.source.commit;artifactId=([long]$m.build.runId*100+$m.build.runAttempt);innerReleaseSha256=$v.archiveSha256;
+                    manifestSha256=$v.manifestSha256;artifactTransportSha256=('4'*64)}}
+        }
+        function Assert-BridgeRejection([scriptblock] $Body,[string] $Code) {
+            $failure=$null; try { $null=& $Body } catch { $failure=$_ }
+            Assert-Bridge ($null -ne $failure -and ($failure.FullyQualifiedErrorId -like ($Code+'*') -or $failure.Exception.Message -ceq $Code)) $Code
+        }
+        $auto=Get-BridgeAdmittedRelease $StandingReleaseArchivePath
+        $rebuilt=Get-BridgeAdmittedRelease $RebuildReleaseArchivePath
+        Assert-Bridge ($auto.sourceCommit -ceq $rebuilt.sourceCommit -and $auto.provenance.releaseId -cne $rebuilt.provenance.releaseId -and
+            $auto.provenance.innerReleaseSha256 -cne $rebuilt.provenance.innerReleaseSha256 -and $rebuilt.run.id -gt $auto.run.id) 'same source with distinct newer build/package identities'
+        $standing=Get-Content -LiteralPath (Join-Path $toolkit 'tests/Fixtures/standing-authorization.json') -Raw | ConvertFrom-Json -AsHashtable
+        $standing.standingAuthorizationId='synthetic-standing'; $standing.targetId='ssrs-web-dev'; $standing.applicationId='ssrs-web'; $standing.environmentName='DEV'
+        $standing.sourceRepository='clcdpc/ssrs-web'; $standing.buildWorkflowPath='.github/workflows/release.yml'; $standing.buildJob='release'; $standing.lineageId=$approval.lineageId
+        $standingRoot=Join-Path $fixture.layout.approvalCatalogRoot 'standing'; [void][IO.Directory]::CreateDirectory($standingRoot)
+        $standingPath=Join-Path $standingRoot 'synthetic-standing.json'
+        $adapterContext=@{module=$module;target=$fixture.target;standingAuthorizationId='synthetic-standing'}
+        Test-BridgeCase 'Actual adapter and toolkit reject missing or revoked standing authorization before IIS effects' {
+            $before=Get-BridgeLiveSnapshot $fixture; $global:SsrsBridge.operations.Clear()
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext } 'Clc.StandingAuthorizationRejected'
+            $standing.enabled=$false; Write-TestJson $standingPath $standing
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext } 'Clc.StandingAuthorizationRejected'
+            Assert-Bridge ((Get-BridgeLiveSnapshot $fixture) -ceq $before -and $global:SsrsBridge.operations.Count -eq 0) 'standing refusal preserved current files and worker'
+            $standing.enabled=$true; Write-TestJson $standingPath $standing
+        }
+        Test-BridgeCase 'Actual toolkit rejects verified identity disagreement without publishing authority or IIS effects' {
+            $bad=$auto | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable; $bad.run.id++
+            $before=Get-BridgeLiveSnapshot $fixture
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $bad $adapterContext } 'Clc.ApprovalMismatch'
+            Assert-Bridge ((Get-BridgeLiveSnapshot $fixture) -ceq $before) 'identity refusal preserved installed state'
+        }
+        Test-BridgeCase 'Actual consumer adapter deploys through standing API and identical verified build reaches fresh-readiness NoOp' {
+            $deployed=Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext
+            Assert-SsrsDeploymentResult $deployed $auto.provenance
+            Assert-Bridge ($deployed.status -ceq 'Deployed' -and $deployed.releaseId -ceq $auto.provenance.releaseId) 'standing deployed compiled application'
+            $before=Get-BridgeLiveSnapshot $fixture; $global:SsrsBridge.operations.Clear(); $requests=$global:SsrsBridge.httpCalls
+            $same=Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext
+            Assert-Bridge ($same.status -ceq 'NoOp' -and $global:SsrsBridge.httpCalls -gt $requests -and $global:SsrsBridge.operations.Count -eq 0 -and
+                (Get-BridgeLiveSnapshot $fixture) -ceq $before) 'standing NoOp verified readiness and preserved bytes'
+        }
+        Test-BridgeCase 'Same-tag fresh package deploys; older builds and lower tags cannot downgrade it' {
+            $firstApprovals=@(Get-ChildItem -LiteralPath $fixture.layout.approvalCatalogRoot -Filter 'auto-*.json' -File | ForEach-Object { @{path=$_.FullName;hash=(Get-FileHash $_.FullName).Hash} })
+            $new=Invoke-SsrsToolkitAutomaticDeployment $rebuilt $adapterContext
+            Assert-SsrsDeploymentResult $new $rebuilt.provenance
+            Assert-Bridge ($new.status -ceq 'Deployed' -and $new.releaseId -ceq $rebuilt.provenance.releaseId) 'fresh same-tag compiled rebuild deployed'
+            foreach ($file in $firstApprovals) { Assert-Bridge ((Get-FileHash $file.path).Hash -ceq $file.hash) 'original exact approvals retained' }
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext } 'Clc.ReleaseIdentityConflict'
+            $lower=$rebuilt | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable; $lower.tag='v1.0.0-dev.2'
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $lower $adapterContext } 'Clc.DowngradeRejected'
+        }
+        Test-BridgeCase 'Revocation blocks an already admitted rebuild retry and preserves actual application state' {
+            $before=Get-BridgeLiveSnapshot $fixture; $standing.enabled=$false; Write-TestJson $standingPath $standing
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $rebuilt $adapterContext } 'Clc.StandingAuthorizationRejected'
+            Assert-Bridge ((Get-BridgeLiveSnapshot $fixture) -ceq $before) 'revoked retry preserved current bytes'
+        }
     }
     Save-BridgeEvidence $fixture (Join-Path $evidenceRoot 'fault-fixture/after-recovery')
     [ordered]@{classification='synthetic-cross-component-qualification';testScriptSha256=$scriptHash;toolkitSourceCommit=$expectedSource;releaseSourceCommit=$manifest.source.commit;releaseId=$manifest.releaseId;
