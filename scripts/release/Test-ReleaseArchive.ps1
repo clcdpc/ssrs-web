@@ -151,6 +151,24 @@ try {
         Assert-Fails { & "$PSScriptRoot/Publish-TagRelease.ps1" } 'TrustedConsumerRequired'
         Assert-Fails { & "$PSScriptRoot/Build-PortalRelease.ps1" -SourceCommit ('1'*40) } 'TrustedProducerContextRequired'
     }
+    Test-Case 'Provenance records tag identity for both producer events and keeps branch CI fixtures independent of release context' {
+        $e=@{recordKind='ssrs-web-build-evidence';repository='clcdpc/ssrs-web';sourceCommit=('1'*40);workflowCommit=('1'*40);workflowPath='.github/workflows/release.yml';
+            buildJob='release';runId=42;runAttempt=1;releaseId='ssrs-web-42-1';innerReleaseSha256=('2'*64);manifestSha256=('3'*64);moduleInventorySha256=('4'*64);
+            deploymentApproval=$false;hostInstallationApproval=$false;integrityVerified=$true;toolkitBuilder=@{};sdkVersion='10.0.303';dependencyLockSha256=('5'*64)}
+        $path=Join-Path $work 'build-evidence.json'; [IO.File]::WriteAllText($path,($e | ConvertTo-Json -Depth 6))
+        $names=@('GITHUB_EVENT_NAME','GITHUB_REF_TYPE','GITHUB_REF_NAME','RELEASE_TAG_OBJECT')
+        $saved=@{}; foreach ($name in $names) { $saved[$name]=[Environment]::GetEnvironmentVariable($name) }
+        try {
+            foreach ($event in @('push','workflow_dispatch')) {
+                $env:GITHUB_EVENT_NAME=$event; $env:GITHUB_REF_TYPE='tag'; $env:GITHUB_REF_NAME='v1.0.0-dev.1'; $env:RELEASE_TAG_OBJECT='1'*40
+                $p=& "$PSScriptRoot/Write-ReleaseProvenance.ps1" -BuildEvidencePath $path -ArtifactId 7 -ArtifactTransportSha256 ('6'*64) -OutputPath (Join-Path $work ($event+'.json'))
+                Assert-True ($p.releaseTag -ceq 'v1.0.0-dev.1' -and $p.tagObjectSha -ceq ('1'*40))
+                $env:GITHUB_REF_TYPE='branch'; $env:GITHUB_REF_NAME='master'; $env:RELEASE_TAG_OBJECT=''
+                $p=& "$PSScriptRoot/Write-ReleaseProvenance.ps1" -BuildEvidencePath $path -ArtifactId 7 -ArtifactTransportSha256 ('6'*64) -OutputPath (Join-Path $work ($event+'-branch.json'))
+                Assert-True (@($p.PSObject.Properties.Name) -cnotcontains 'releaseTag')
+            }
+        } finally { foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$saved[$name]) } }
+    }
 } finally {
     foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name,$previous[$name]) }
     $report=@{classification='synthetic-release-archive-and-historical-eligibility';liveReleasePublished=$false;passed=$results.Count;cases=$results}

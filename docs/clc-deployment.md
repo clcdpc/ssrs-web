@@ -193,7 +193,7 @@ The synthetic fixture's AcceptCandidate case does not establish live RestorePrev
 
 ## Repeatable local checks
 
-Current repository evidence: locked restore/Release build and 1,334 .NET tests passed; tag admission/activation passed 29/29, archive/historical eligibility 8/8, retained administrative/host safeguards 32/32, and ordinary/Release beta.3 packaging 29/29. Full synthetic browser and subscription suites passed with 376 accessibility scans. Actionlint 1.7.12, PowerShell syntax, configuration publish guard, generated-artifact policy/tests (2/2), npm audit and whitespace checks passed.
+Current repository evidence: locked restore/Release build and 1,334 .NET tests passed; tag admission/activation passed 29/29, archive/historical eligibility 9/9, retained administrative/host safeguards 32/32, and ordinary/Release beta.3 packaging 29/29. Full synthetic browser and subscription suites passed with 376 accessibility scans. Actionlint 1.7.12, PowerShell syntax, configuration publish guard, generated-artifact policy/tests (2/2), npm audit and whitespace checks passed.
 
 The real consumer adapter and unmodified toolkit source at `dd93d0df515d914f692b7aefea6e06dd5056e8d8` passed **12/12** combined Windows checks with compiled portal packages, actual NTFS changes and loopback readiness. Coverage includes the existing deployment/recovery sequence plus standing authorization, provenance rejection, Deployed/NoOp, same-tag fresh packages, older-build/downgrade rejection and revoked retries. The candidate was checked out at its exact commit and every tracked byte authenticated before import. This establishes compatibility with that unmerged candidate, not availability in a published/installed host toolkit.
 

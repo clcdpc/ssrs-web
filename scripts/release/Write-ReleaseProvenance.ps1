@@ -21,7 +21,7 @@ $record=[ordered]@{schemaVersion=1;recordKind='ssrs-web-release-provenance';repo
     artifactId=$ArtifactId;artifactTransportSha256=$digest;innerReleaseSha256=$evidence.innerReleaseSha256;manifestSha256=$evidence.manifestSha256;
     toolkitBuilder=$evidence.toolkitBuilder;moduleInventorySha256=$evidence.moduleInventorySha256;releaseId=$evidence.releaseId;
     sdkVersion=$evidence.sdkVersion;dependencyLockSha256=$evidence.dependencyLockSha256;integrityVerified=$true;deploymentApproval=$false;hostInstallationApproval=$false}
-if ($env:GITHUB_EVENT_NAME -cin @('push','workflow_dispatch')) {
+if ($env:GITHUB_EVENT_NAME -cin @('push','workflow_dispatch') -and $env:GITHUB_REF_TYPE -ceq 'tag') {
     . "$PSScriptRoot/TagRelease.Common.ps1"
     $null=Get-SsrsReleaseTag $env:GITHUB_REF_NAME
     if ($env:RELEASE_TAG_OBJECT -cnotmatch '^[a-f0-9]{40}$') { Stop-Release 'Release.Tag.IdentityRequired' }
