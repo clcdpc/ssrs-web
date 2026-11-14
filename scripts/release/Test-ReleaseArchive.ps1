@@ -151,6 +151,82 @@ try {
         Assert-Fails { & "$PSScriptRoot/Publish-TagRelease.ps1" } 'TrustedConsumerRequired'
         Assert-Fails { & "$PSScriptRoot/Build-PortalRelease.ps1" -SourceCommit ('1'*40) } 'TrustedProducerContextRequired'
     }
+    Test-Case 'Actual publisher entry point loads its own helpers and publishes offline in a clean process' {
+        $fixture=Join-Path $work 'publisher'; [void][IO.Directory]::CreateDirectory($fixture)
+        # Keep the entry point and shared validation/publication code unchanged.
+        # Only acquisition and GitHub I/O are replaced, inside an isolated copy.
+        foreach ($name in @('Publish-TagRelease.ps1','Release.Common.ps1','TagRelease.Common.ps1','ReleaseArchive.Common.ps1')) {
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $fixture
+        }
+        $r=New-TestRelease
+        $assembly=Join-Path $fixture 'publisher.dll'
+        Add-Type -OutputAssembly $assembly -TypeDefinition @'
+[assembly: System.Reflection.AssemblyMetadata("Clc.ApplicationId", "ssrs-web")]
+[assembly: System.Reflection.AssemblyMetadata("Clc.IdentityKind", "Release")]
+[assembly: System.Reflection.AssemblyMetadata("Clc.ReleaseId", "ssrs-web-42-1")]
+[assembly: System.Reflection.AssemblyMetadata("Clc.SourceCommit", "1111111111111111111111111111111111111111")]
+public static class PublisherFixture { }
+'@
+        $manifest=[Text.Encoding]::UTF8.GetBytes('{"build":{"workflowPath":".github/workflows/release.yml","job":"release","runId":42,"runAttempt":1}}')
+        $zip=[IO.Compression.ZipFile]::Open($r.archivePath,[IO.Compression.ZipArchiveMode]::Update)
+        try {
+            foreach ($item in @(@{name='manifest.json';bytes=$manifest},@{name='application/SsrsPortal.dll';bytes=[IO.File]::ReadAllBytes($assembly)})) {
+                $stream=$zip.CreateEntry($item.name).Open()
+                try { $stream.Write($item.bytes) } finally { $stream.Dispose() }
+            }
+        } finally { $zip.Dispose() }
+        $r.provenance.innerReleaseSha256=(Get-FileHash $r.archivePath).Hash.ToLowerInvariant()
+        $r.provenance.manifestSha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($manifest)).ToLowerInvariant()
+        [IO.File]::WriteAllText((Join-Path $fixture 'release.json'),($r | ConvertTo-Json -Depth 8))
+        [IO.File]::WriteAllText((Join-Path $fixture 'event.json'),'{"workflow_run":{"id":42,"run_attempt":1}}')
+        foreach ($name in @('Copy-Record','Reset-Service','Invoke-TagGitHub','Invoke-SsrsReleaseWrite')) {
+            [IO.File]::AppendAllText((Join-Path $fixture 'TagRelease.Common.ps1'),("`nfunction $name {`n"+(Get-Command $name).Definition+"`n}`n"))
+        }
+        [IO.File]::AppendAllText((Join-Path $fixture 'TagRelease.Common.ps1'),@'
+function Get-SsrsAuthenticatedTagRelease($EventRun,[string] $TrustedCommit,[string] $Directory) {
+    if ($EventRun.id -ne 42 -or $EventRun.run_attempt -ne 1 -or $TrustedCommit -cne ('7'*40)) { throw 'Unexpected publisher acquisition' }
+    [void][IO.Directory]::CreateDirectory($Directory)
+    return Read-TagJson ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'release.json')))
+}
+Reset-Service
+'@)
+        # Mirror the real downloader's child script scope: it loads helpers for
+        # itself, which must not satisfy the publisher's dependency on them.
+        [IO.File]::WriteAllText((Join-Path $fixture 'Get-ReleaseToolkit.ps1'),@'
+param($LockPath,$Destination)
+. "$PSScriptRoot/Release.Common.ps1"
+[pscustomobject]@{moduleManifest=(Join-Path $PSScriptRoot 'OfflineToolkit.psm1')}
+'@)
+        [IO.File]::WriteAllText((Join-Path $fixture 'OfflineToolkit.psm1'),@'
+function Test-ClcRelease($ArchivePath) {
+    $r=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release.json') -Raw | ConvertFrom-Json -AsHashtable
+    if ($ArchivePath -cne $r.archivePath) { throw 'Unexpected inspector archive' }
+    return @{integrityVerified=$true;authorizedForDeployment=$false;applicationId='ssrs-web';releaseId=$r.provenance.releaseId;
+        sourceCommit=$r.sourceCommit;archiveSha256=$r.provenance.innerReleaseSha256;manifestSha256=$r.provenance.manifestSha256}
+}
+'@)
+        $start=[Diagnostics.ProcessStartInfo]::new()
+        $start.FileName=Join-Path $PSHOME $(if ($IsWindows) {'pwsh.exe'} else {'pwsh'})
+        $start.UseShellExecute=$false; $start.CreateNoWindow=$true; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
+        foreach ($argument in @('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $fixture 'Publish-TagRelease.ps1'))) { $start.ArgumentList.Add($argument) }
+        $context=@{GITHUB_REPOSITORY='clcdpc/ssrs-web';GITHUB_EVENT_NAME='workflow_run';GITHUB_REF='refs/heads/master';GITHUB_REF_PROTECTED='true';
+            GITHUB_WORKFLOW_SHA=('7'*40);GITHUB_SHA=('7'*40);GITHUB_WORKFLOW_REF='clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master';
+            GITHUB_EVENT_PATH=(Join-Path $fixture 'event.json');GITHUB_RUN_ID='99';GITHUB_RUN_ATTEMPT='1';RUNNER_TEMP=$fixture;SSRS_ARTIFACT_READ_TOKEN='offline-fixture'}
+        foreach ($name in $context.Keys) { $start.Environment[$name]=$context[$name] }
+        $process=[Diagnostics.Process]::new(); $process.StartInfo=$start
+        try {
+            Assert-True ($process.Start())
+            $stdout=$process.StandardOutput.ReadToEndAsync(); $stderr=$process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw ('Publisher process failed: '+$stderr.GetAwaiter().GetResult()) }
+            $out=Read-TagJson ([Text.Encoding]::UTF8.GetBytes($stdout.GetAwaiter().GetResult()))
+            Assert-True ($out.outcome -ceq 'Published' -and $out.releaseId -eq 5 -and
+                $out.archivedPackageSha256 -ceq $r.provenance.innerReleaseSha256 -and $out.currentPackageSha256 -ceq $out.archivedPackageSha256)
+            $publication=@(Get-ChildItem -LiteralPath $fixture -Directory -Filter 'ssrs-release-archive-*')[0].FullName
+            $files=@(Get-ChildItem -LiteralPath (Join-Path $publication 'publication') -File)
+            Assert-True ($files.Count -eq 6)
+        } finally { $process.Dispose() }
+    }
     Test-Case 'Provenance records tag identity for both producer events and keeps branch CI fixtures independent of release context' {
         $e=@{recordKind='ssrs-web-build-evidence';repository='clcdpc/ssrs-web';sourceCommit=('1'*40);workflowCommit=('1'*40);workflowPath='.github/workflows/release.yml';
             buildJob='release';runId=42;runAttempt=1;releaseId='ssrs-web-42-1';innerReleaseSha256=('2'*64);manifestSha256=('3'*64);moduleInventorySha256=('4'*64);

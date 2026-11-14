@@ -1,6 +1,7 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param()
+. "$PSScriptRoot/Release.Common.ps1"
 . "$PSScriptRoot/TagRelease.Common.ps1"
 if ($env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_run' -or $env:GITHUB_REF -cne 'refs/heads/master' -or
     $env:GITHUB_REF_PROTECTED -cne 'true' -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
