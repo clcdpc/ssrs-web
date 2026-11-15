@@ -9,7 +9,7 @@ permissions:
 jobs:
   github:
     if: github.repository == 'clcdpc/ssrs-web'
-    uses: clcdpc/clc-deployment/.github/workflows/validate-deployment.yml@02e15ae736f6798e6939910aad1ccdca8b34fb67
+    uses: clcdpc/clc-deployment/.github/workflows/validate-deployment.yml@c09a841871a1552ec131c12cdd8b4c50f930f5f9
     with:
       application_id: ssrs-web
       target_id: ssrs-web-dev
@@ -61,7 +61,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: '02e15ae736f6798e6939910aad1ccdca8b34fb67'
+          ref: 'c09a841871a1552ec131c12cdd8b4c50f930f5f9'
           path: shared-validator
           persist-credentials: false
       - name: Inspect the actual enrolled local IIS host
@@ -100,7 +100,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: '02e15ae736f6798e6939910aad1ccdca8b34fb67'
+          ref: 'c09a841871a1552ec131c12cdd8b4c50f930f5f9'
           path: shared-validator
           persist-credentials: false
       - name: Aggregate every available observation even when a stage fails

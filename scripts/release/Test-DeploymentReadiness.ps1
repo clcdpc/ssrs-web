@@ -6,7 +6,7 @@ $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $workflowPath=Join-Path $repository '.github/workflows/diagnose-deployment.yml'
 $workflow=[IO.File]::ReadAllText($workflowPath).Replace("`r`n","`n")
-$revision='02e15ae736f6798e6939910aad1ccdca8b34fb67'
+$revision='c09a841871a1552ec131c12cdd8b4c50f930f5f9'
 $checkout='actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8'
 $results=[Collections.Generic.List[string]]::new()
 function Assert-True([bool] $Value) {
@@ -37,6 +37,8 @@ Test-Case 'Only manual dispatch, three independent stages and read-only permissi
     Assert-True ($github -cnotmatch '(?m)^    needs:|runs-on:|environment:')
 }
 Test-Case 'All executable shared code and checkout actions use the reviewed immutable pins' {
+    Assert-True ([regex]::Matches($workflow,[regex]::Escape($revision)).Count -eq 3)
+    Assert-True (-not $workflow.Contains('02e15ae736f6798e6939910aad1ccdca8b34fb67'))
     $uses=@([regex]::Matches($workflow,'(?m)^\s+(?:- )?uses: (\S+)') | ForEach-Object { $_.Groups[1].Value })
     Assert-True ($uses.Count -eq 3 -and $uses[0] -ceq "clcdpc/clc-deployment/.github/workflows/validate-deployment.yml@$revision")
     Assert-True ($uses[1] -ceq $checkout -and $uses[2] -ceq $checkout)
