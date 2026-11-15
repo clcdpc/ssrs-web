@@ -247,7 +247,7 @@ try {
         DataProtection=@{KeyStoreCompatibilityId='ssrs-web-dpapi-user-v1';KeyRingPath=(Join-Path $conventionalRoot 'Keys')};
         Portal=@{UseMock=$false;TestAuth=$false;ReportServer='https://127.0.0.1:1/ReportServer';ReportAccessPolicy='GlobalBlocklist';AllowedRoots=@('/Synthetic');ExcludedPrefixes=@()};
         Entra=@{ClientId=[Guid]::NewGuid().ToString('D');ClientSecret='synthetic-unused-secret';AllowedTenantIds=@('00000000-0000-0000-0000-000000000123')};
-        CatalogMonitor=@{Enabled=$false;ConnectionString=$null};Subscriptions=@{Enabled=$false};Logging=@{File=@{Enabled=$true;Rotation='Daily';MaxFileSizeBytes=52428800L;RetentionDays=30L}}}
+        CatalogMonitor=@{Enabled=$false;ConnectionString=$null};Subscriptions=@{Enabled=$false};Logging=@{File=@{Enabled=$true;MaxFileSizeBytes=52428800L;RetentionDays=30L}}}
     $configurationPath=Join-Path $conventionalRoot 'Config/application.json'
     Write-TestJson $configurationPath $configuration
     $fixture=New-BridgeFixture; Set-T2FixtureInModule $fixture

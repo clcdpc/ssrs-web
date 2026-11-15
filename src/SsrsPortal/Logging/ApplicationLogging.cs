@@ -1,6 +1,8 @@
+using Clc.Logging;
 using NLog;
 using NLog.Config;
 using NLog.Extensions.Logging;
+using NLog.Layouts;
 using NLog.Targets;
 using NLog.Targets.Wrappers;
 using SsrsPortal.Configuration;
@@ -8,25 +10,24 @@ using SsrsPortal.Soap;
 
 namespace SsrsPortal.Logging;
 
-// Each host owns this factory. Never configure LogManager or call its global Shutdown.
+// Application policy around caller-owned Clc.Logging. Dispose after the host.
 internal sealed class ApplicationLogging : IDisposable
 {
-    private readonly LogFactory _factory = new() { AutoShutdown = false };
+    private static readonly string[] LogLevelSections = ["Logging:LogLevel", "Logging:NLog:LogLevel", "Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel"];
+    private readonly ClcLogging _logging;
     private readonly SafeLogLayout _layout;
-    private readonly TextWriter _processOutput;
+    private LogFactory? _factory;
     private string? _clientSecret;
-    private int _fileFailures;
-    private int _disposed;
-    internal string DirectoryPath { get; }
-    internal LogFactory Factory => _factory;
+    private bool _archiveLimitConfigured;
+    internal string DirectoryPath => _logging.DirectoryPath;
+    internal LogFactory Factory => _factory ?? throw new InvalidOperationException("Configured logging is not registered.");
     internal bool FileEnabled { get; private set; } = true;
 
     internal static string ConventionalDirectory => Path.Combine(ProgramDataPath.Paths.ApplicationDataDirectory, "Logs");
 
-    internal static string ResolveDirectory(WebApplicationBuilder builder)
+    internal static ApplicationLogging Create(WebApplicationBuilder builder, IHttpContextAccessor? requests = null)
     {
         var testPath = builder.Configuration[ExternalConfigurationLoader.TestFileKey];
-        string directory;
         if (ExternalConfigurationLoader.HasTestFileSetting(builder.Configuration))
         {
             if (!builder.Environment.IsDevelopment())
@@ -37,115 +38,41 @@ internal sealed class ApplicationLogging : IDisposable
             {
                 throw new InvalidOperationException("The Development test-only configuration file override requires an absolute temporary file path.");
             }
-            directory = Path.Combine(Path.GetDirectoryName(testPath)!, "Logs");
+            var applicationDirectory = Path.GetDirectoryName(testPath)!;
+            LocalFileSystemPolicy.RequireLocalPhysicalPath(Path.Combine(applicationDirectory, "Logs"), "Application log directory");
+            return new ApplicationLogging(applicationDirectory, null, requests);
         }
-        else { directory = ConventionalDirectory; }
-        LocalFileSystemPolicy.RequireLocalPhysicalPath(directory, "Application log directory");
-        return directory;
+        var paths = ProgramDataPath.Paths;
+        LocalFileSystemPolicy.RequireLocalPhysicalPath(Path.Combine(paths.ApplicationDataDirectory, "Logs"), "Application log directory");
+        return new ApplicationLogging(paths.ApplicationDataDirectory, paths, requests);
     }
 
-    internal ApplicationLogging(string directory, IHttpContextAccessor? requests = null, TextWriter? processOutput = null)
+    private ApplicationLogging(string applicationDirectory, Clc.Configuration.ClcApplicationPaths? paths, IHttpContextAccessor? requests)
     {
-        DirectoryPath = directory;
-        _processOutput = processOutput ?? Console.Error;
         _layout = new SafeLogLayout(() => _clientSecret, requests ?? new HttpContextAccessor());
-        try
+        void Configure(ClcLoggingOptions options)
         {
-            Configure(new FileLoggingOptions(), bootstrap: true);
-            Write(NLog.LogLevel.Info, "Application bootstrap started.");
-            VerifyFileLogging();
+            options.Layout = _layout;
+            options.ConfigureNLog = ConfigureApplicationNLog;
+            options.FlushTimeout = TimeSpan.FromSeconds(5);
+            FileEnabled = options.File.Enabled;
         }
-        catch
-        {
-            Dispose();
-            throw;
-        }
+        _logging = paths is null ? ClcLogging.CreateForDirectory(applicationDirectory, Configure) : ClcLogging.Create(paths, Configure);
+        _logging.Logger.LogInformation("Application bootstrap started.");
     }
-
-    internal void Configure(IConfiguration configuration)
-    {
-        // Register the known secret before validating any other operational settings.
-        _clientSecret = configuration["Entra:ClientSecret"];
-        var options = FileLoggingOptions.Read(configuration);
-        Configure(options);
-        if (options.Enabled)
-        {
-            Write(NLog.LogLevel.Info, "Persistent file logging configured.");
-            VerifyFileLogging();
-        }
-        else
-        {
-            Write(NLog.LogLevel.Warn, "Persistent file logging disabled by Logging:File:Enabled; using process output.");
-        }
-    }
-
-    private void Configure(FileLoggingOptions options, bool bootstrap = false)
-    {
-        Flush();
-        FileEnabled = options.Enabled;
-        var configuration = new LoggingConfiguration(_factory);
-        Target target;
-        if (options.Enabled)
-        {
-            try { Directory.CreateDirectory(DirectoryPath); }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                throw new InvalidOperationException("Persistent file logging cannot create the conventional Logs directory. Provision Logs with create/write/modify permissions for the process identity.");
-            }
-            var fallback = new FallbackGroupTarget("file-with-fallback") { ReturnToFirstOnSuccess = true };
-            var file = CreateFileTarget(DirectoryPath, options, _layout);
-            // Do not delete archives before the authoritative retention has been read.
-            if (bootstrap) { file.MaxArchiveDays = 0; }
-            configuration.AddTarget(file);
-            fallback.Targets.Add(file);
-            fallback.Targets.Add(new ProcessOutputTarget(_layout, _processOutput, () => Interlocked.Increment(ref _fileFailures)));
-            target = fallback;
-        }
-        else
-        {
-            target = new ProcessOutputTarget(_layout, _processOutput);
-        }
-        var asynchronous = new AsyncTargetWrapper(target, 256, AsyncTargetWrapperOverflowAction.Block)
-        {
-            Name = "async-file", BatchSize = 1, TimeToSleepBetweenBatches = 10
-        };
-        configuration.AddRule(NLog.LogLevel.Trace, NLog.LogLevel.Fatal, asynchronous);
-        _factory.Configuration = configuration;
-    }
-
-    internal static FileTarget CreateFileTarget(string directory, FileLoggingOptions options, NLog.Layouts.Layout layout) => new("application-file")
-    {
-        FileName = Path.Combine(directory, "ssrs-web-${shortdate}.log"),
-        Layout = layout,
-        // ${shortdate} rolls at local midnight; ArchiveSuffixFormat handles same-day sizes.
-        ArchiveAboveSize = options.MaxFileSizeBytes,
-        ArchiveSuffixFormat = ".{0:000}",
-        MaxArchiveDays = options.RetentionDays,
-        MaxArchiveFiles = -1,
-        ArchiveOldFileOnStartup = false,
-        DeleteOldFileOnStartup = false,
-        ReplaceFileContentsOnEachWrite = false,
-        KeepFileOpen = true,
-        AutoFlush = true,
-        CreateDirs = true,
-        OpenFileCacheSize = 1
-    };
 
     internal void Register(WebApplicationBuilder builder)
     {
+        // Register the known secret before validating any other operational settings.
+        _clientSecret = builder.Configuration["Entra:ClientSecret"];
+        FileLoggingOptions.Validate(builder.Configuration);
+        _archiveLimitConfigured = builder.Configuration["Logging:File:MaxArchiveFiles"] is not null;
         builder.Logging.ClearProviders();
-        // Only the application.json providers retained by ExternalConfigurationLoader are used.
-        builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-        builder.Logging.AddProvider(new NLogLoggerProvider(new NLogProviderOptions
-        {
-            IncludeScopes = true, CaptureMessageTemplates = true, CaptureMessageProperties = true,
-            RemoveLoggerFactoryFilter = false, ShutdownOnDispose = false, AutoShutdown = false,
-            RegisterServiceProvider = false, LoggingConfigurationSectionName = ""
-        }, _factory));
+        builder.AddClcLogging(_logging);
         // Protocol diagnostics can contain callback credentials. Operators can tune all
         // application categories, but these internals remain at least Warning.
         var protocolCategories = new[] { "Microsoft.AspNetCore.Authentication", "Microsoft.IdentityModel" };
-        var configuredCategories = builder.Configuration.GetSection("Logging:LogLevel").GetChildren().Select(child => child.Key)
+        var configuredCategories = LogLevelSections.SelectMany(section => builder.Configuration.GetSection(section).GetChildren()).Select(child => child.Key)
             .Where(name => protocolCategories.Any(prefix => name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase)));
         foreach (var category in protocolCategories.Concat(configuredCategories).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -155,13 +82,39 @@ internal sealed class ApplicationLogging : IDisposable
         builder.Services.AddSingleton(this);
     }
 
+    private void ConfigureApplicationNLog(LoggingConfiguration configuration)
+    {
+        _factory = configuration.LogFactory;
+        var file = configuration.FindTargetByName<FileTarget>("file");
+        if (file is not null)
+        {
+            file.FileName = new CompoundLayout
+            {
+                Layouts = { Layout.FromLiteral(Path.Combine(DirectoryPath, "ssrs-web-")), new SimpleLayout("${shortdate}.log") }
+            };
+            if (!_archiveLimitConfigured) { file.MaxArchiveFiles = -1; }
+        }
+        // Wrap the package's whole route so file failure and recovery keep their ordering.
+        var rule = configuration.LoggingRules.Single();
+        var asynchronous = new AsyncTargetWrapper(rule.Targets.Single(), 256, AsyncTargetWrapperOverflowAction.Block)
+        {
+            Name = "async-file", BatchSize = 1, TimeToSleepBetweenBatches = 10
+        };
+        configuration.AddTarget(asynchronous);
+        rule.Targets.Clear();
+        rule.Targets.Add(asynchronous);
+    }
+
     private static Microsoft.Extensions.Logging.LogLevel ConfiguredLevel(IConfiguration configuration, string category)
     {
-        var levels = configuration.GetSection("Logging:LogLevel").GetChildren();
-        var setting = levels.Where(level => category.StartsWith(level.Key + ".", StringComparison.OrdinalIgnoreCase) ||
-                category.Equals(level.Key, StringComparison.OrdinalIgnoreCase)).OrderByDescending(level => level.Key.Length).FirstOrDefault()?.Value
-            ?? configuration["Logging:LogLevel:Default"];
-        return Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(setting, true, out var minimum) ? minimum : Microsoft.Extensions.Logging.LogLevel.Information;
+        // Provider-specific child rules must not bypass the floor, or lose an operator's stricter level.
+        return LogLevelSections.Select(section =>
+        {
+            var setting = configuration.GetSection(section).GetChildren().Where(level => category.StartsWith(level.Key + ".", StringComparison.OrdinalIgnoreCase) ||
+                    category.Equals(level.Key, StringComparison.OrdinalIgnoreCase)).OrderByDescending(level => level.Key.Length).FirstOrDefault()?.Value
+                ?? configuration[section + ":Default"];
+            return Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(setting, true, out var minimum) ? minimum : Microsoft.Extensions.Logging.LogLevel.Information;
+        }).Max();
     }
 
     internal void ObserveLifetime(WebApplication app)
@@ -179,7 +132,10 @@ internal sealed class ApplicationLogging : IDisposable
 
     internal void Fatal(Exception exception)
     {
-        Write(NLog.LogLevel.Fatal, "Application startup or hosting failed.", _layout.HasException(exception) ? null : exception);
+        Flush();
+        var unrendered = _layout.HasException(exception) ? null : exception;
+        if (_factory is null) { _logging.Logger.LogCritical(unrendered, "Application startup or hosting failed."); }
+        else { Write(NLog.LogLevel.Fatal, "Application startup or hosting failed.", unrendered); }
         Flush();
     }
 
@@ -190,37 +146,44 @@ internal sealed class ApplicationLogging : IDisposable
         FailureDiagnostics.Filter(FailureDiagnostics.ExceptionText(exception, 65536)));
 
     private void Write(NLog.LogLevel level, string message, Exception? exception = null) =>
-        _factory.GetLogger("SsrsPortal.Lifecycle").Log(new LogEventInfo(level, "SsrsPortal.Lifecycle", message) { Exception = exception });
+        Factory.GetLogger("SsrsPortal.Lifecycle").Log(new LogEventInfo(level, "SsrsPortal.Lifecycle", message) { Exception = exception });
 
-    private void VerifyFileLogging()
+    internal void VerifyFileLogging()
     {
-        Flush();
-        if (Volatile.Read(ref _fileFailures) > 0 || !Directory.EnumerateFiles(DirectoryPath, "ssrs-web-*.log").Any())
+        if (!FileEnabled)
         {
-            throw new InvalidOperationException("Persistent file logging cannot write to Logs. Check create/write/modify permissions, file locks and available disk space. Startup stopped; see process/hosting output.");
+            Write(NLog.LogLevel.Warn, "Persistent file logging disabled by Logging:File:Enabled; using process output.");
+            Flush();
+            return;
         }
-    }
-
-    internal void Flush()
-    {
-        if (Volatile.Read(ref _disposed) == 0) { _factory.Flush(TimeSpan.FromSeconds(5)); }
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) { return; }
-        _factory.Flush(TimeSpan.FromSeconds(5));
-        _factory.Dispose();
-    }
-
-    private sealed class ProcessOutputTarget(NLog.Layouts.Layout layout, TextWriter output, Action? fileFailure = null) : TargetWithLayout
-    {
-        protected override void InitializeTarget() { Layout = layout; base.InitializeTarget(); }
-        protected override void Write(LogEventInfo logEvent)
+        try
         {
-            fileFailure?.Invoke();
-            if (fileFailure is not null) { output.WriteLine("SSRS Web persistent file logging write failed; check Logs permissions, file locks and disk space. Event follows on process output."); }
-            output.WriteLine(RenderLogEvent(Layout, logEvent));
+            var marker = "logging-ready-" + Guid.NewGuid().ToString("N");
+            var probe = new LogEventInfo(NLog.LogLevel.Info, "SsrsPortal.Lifecycle", "Persistent file logging configured/verified; " + marker);
+            // The same event supplies the local date, including across midnight/size rollover.
+            var filePrefix = "ssrs-web-" + probe.TimeStamp.ToLocalTime().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            Factory.GetLogger(probe.LoggerName).Log(probe);
+            Flush();
+            // NLog 6 can continue in a numbered file after size rollover/restart.
+            foreach (var path in Directory.EnumerateFiles(DirectoryPath, filePrefix + "*.log").OrderByDescending(File.GetLastWriteTimeUtc))
+            {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), "^" + filePrefix + @"(?:\.\d+)?\.log$")) { continue; }
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                // SafeLogLayout bounds a record to 128K characters. Read only its bounded UTF-8 tail.
+                var length = stream.Length;
+                stream.Seek(Math.Max(0, length - SafeLogLayout.MaximumEventCharacters * 4L), SeekOrigin.Begin);
+                var tail = new byte[checked((int)(length - stream.Position))];
+                stream.ReadExactly(tail);
+                if (System.Text.Encoding.UTF8.GetString(tail).Contains(marker, StringComparison.Ordinal)) { return; }
+            }
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NLogRuntimeException)
+        {
+            // Never surface a dependency exception or a submitted path/value to hosting.
+        }
+        throw new InvalidOperationException("Persistent file logging cannot write to Logs. Check create/write/modify permissions, file locks and available disk space. Startup stopped; see process/hosting output.");
     }
+
+    internal void Flush() => _logging.Flush();
+    public void Dispose() => _logging.Dispose();
 }

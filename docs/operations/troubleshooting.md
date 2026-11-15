@@ -4,9 +4,9 @@
 
 ## Persistent file logging
 
-NLog 6.2.2 and NLog.Extensions.Logging 6.2.2 receive existing `ILogger` events. Each host owns its factory and shutdown, so concurrent test hosts cannot reconfigure or stop each other. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
+`Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. Each caller-owned logging instance stays alive through host shutdown and disposal; concurrent test hosts cannot reconfigure or stop each other. ssrs-web owns `SafeLogLayout`, its output-boundary sanitizer, and explicitly removes default providers so normal events have one sanitized NLog path. Unrelated providers would need their own output policy. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
-Production logs use `%ProgramData%\clc-ssrs-web\Logs\`, resolved through `Environment.SpecialFolder.CommonApplicationData`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. The app may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
+Production logs use `%ProgramData%\clc-ssrs-web\Logs\`, resolved through `Environment.SpecialFolder.CommonApplicationData`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
 
 Files use local dates: `ssrs-web-2026-11-01.log`. Extra files use numbered suffixes, such as `ssrs-web-2026-11-01.001.log`. Entries start with a millisecond timestamp, UTC offset, severity and category. Message, template, JSON properties/scopes and any exception details follow; `---` separates entries. Events use this single text format without routine duplicate files. UTC offsets distinguish repeated daylight-saving hours.
 
@@ -14,7 +14,7 @@ Defaults in the external application.json:
 
 ```json
 "Logging": {
-  "File": { "Enabled": true, "Rotation": "Daily", "MaxFileSizeBytes": 52428800, "RetentionDays": 30 },
+  "File": { "Enabled": true, "MaxFileSizeBytes": 52428800, "RetentionDays": 30 },
   "LogLevel": {
     "Default": "Information", "SsrsPortal": "Debug", "Microsoft": "Warning",
     "Microsoft.AspNetCore": "Warning", "Microsoft.AspNetCore.Authentication": "Warning",
@@ -23,11 +23,13 @@ Defaults in the external application.json:
 }
 ```
 
-Named levels Trace through None are accepted; numeric or unknown levels fail safely. Rotation supports Daily only. Size bounds are 1 KiB–1 GiB; retention is 1–3650 days, even with file output disabled. Unsupported options (including paths) or malformed values stop startup without echoing values. Restart/recycle after changes. `Enabled=false` sends normal events to filtered process output. Bootstrap still attempts a diagnostic file before reading this setting.
+Named levels Trace through None are accepted; numeric or unknown levels fail safely. Daily rotation is automatic. **Before deploying this migration, manually remove the legacy `Logging:File:Rotation` key from existing application.json files**, including `"Rotation": "Daily"`; it is now rejected. Size bounds are 1 KiB–1 GiB; retention is 1–3650 days, even with file output disabled. Optional `MaxArchiveFiles` accepts 1–10000; omitting it preserves ssrs-web's historical unlimited archive count with age-based retention, overriding the shared package's count default. Unsupported options (including paths), empty/null option objects and malformed values stop startup without echoing values. Restart/recycle after changes. `Enabled=false` sends configured events through SafeLogLayout to native stderr and skips persistent-file readiness without creating a log file.
 
-NLog rolls dates on the first event after midnight and rolls size without restarting. One bounded event may exceed the 50 MiB threshold before rollover. Age cleanup covers all matching files, including same-day archives, at startup/rollover as events arrive. Bootstrap defers cleanup until it reads the external retention setting. No separate service cleans up while the app is idle/stopped. Restarts append to existing files, never intentionally erase them. Disk use depends on traffic; monitor free space and tune category levels.
+NLog rolls dates on the first event after midnight and rolls size without restarting. One bounded event or flushed batch may exceed the 50 MiB threshold before rollover. Age cleanup covers matching files, including same-day archives, at startup/rollover as events arrive. Bootstrap does not touch files or delete archives; configured retention applies only after loading the authoritative snapshot. No separate service cleans up while the app is idle/stopped. Restarts append to existing files, including the latest numbered same-day file after size rollover. Existing logs remain in place across deployment. Disk use depends on traffic; monitor free space and tune category levels.
 
-An async queue holds up to 256 events and writes/flushes promptly. A full queue applies backpressure rather than dropping errors. Fatal startup and normal shutdown allow five seconds to flush. OS crashes, forced kills or IIS timeouts can still lose queued events. Bootstrap requires successful file creation; an unavailable directory stops startup with safe process/hosting output. Runtime write failures use filtered process output and retry files on subsequent events. If files stop growing, check hosting output and disk/ACL health. IIS stdout is not the normal destination.
+The application wraps the package's file-to-stderr fallback route in a native NLog async queue: 256 events, blocking overflow, batch size 1 and 10 ms between batches. NLog precalculates SafeLogLayout on the producing thread while request secrets and scopes exist, for both destinations. Fatal startup and normal shutdown allow five seconds to flush. OS crashes, forced kills or IIS timeouts can still lose queued events.
+
+Before external configuration finishes loading, bootstrap and startup failures go only to sanitized stderr. Those early records are never replayed into persistent files. After registration, enabled file logging must pass an application-owned readiness probe before host construction or serving requests: emit a unique nonsecret Info marker through the native configured pipeline, flush, then verify the marker in a bounded tail of the actual current-day file (including size suffixes). Microsoft category settings such as `None` cannot suppress this check; directory creation or stderr fallback cannot satisfy it. Failure intentionally stops startup with guidance to check Logs permissions, locks and disk space. Runtime file failures instead fall back through SafeLogLayout to native stderr and retry files on subsequent events; recovery resumes persistent output without routine duplication. The former custom fallback warning banner is no longer emitted. Retain hosting stderr if fallback records are required. IIS stdout is not the normal destination.
 
 Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOverlappingRotation=true`). The old worker must drain and close files before its replacement writes. Allow shutdown time for request/background-service draining and log flush. Recycling invalidates in-memory report sessions. Web gardens, overlapping workers and farms require coordinated file targeting/retention and distributed sessions before use. NLog's core file target supports one writer here.
 
@@ -61,7 +63,7 @@ The service gets Config read/traverse and Logs Modify, including create/write/ap
 
 ### Startup troubleshooting and deployment
 
-Check Logs first, even if application.json is missing or invalid: bootstrap runs before configuration loads. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. Other hosting/dependency failures retain their useful failure chain. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
+Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
 The [CLC deployment runbook](../clc-deployment.md) preserves Config and Logs outside the managed release, with Config read-only and Logs write/modify access for runtime. The single worker drains without overlapping recycle. Deployment neither packages configuration/logs nor changes their ACLs.
 
@@ -72,7 +74,7 @@ The consumer preflight checks that the physical Logs path is disjoint from the a
 Complete these checks under an authorized DEV host procedure; synthetic file tests do not prove live ACL or IIS behavior.
 
 1. Verify effective Config read/traverse and Logs create/append/rotate access under the actual regular AD pool identity. Confirm it cannot modify Config or the ProgramData application root and is not a local administrator.
-2. Confirm one worker and non-overlapping recycle. Start the app and verify bootstrap/startup entries appear in the ProgramData Logs sibling, outside the website and release directories.
+2. Confirm one worker and non-overlapping recycle. Verify early bootstrap entries in hosting stderr, then configured readiness/startup entries in the ProgramData Logs sibling, outside the website and release directories. Early entries must not be replayed into files.
 3. Correlate a browser Reference with Trace/SOAP-reference log fields. Confirm useful bounded failure details while credentials, cookies, authorization headers, tokens, raw callbacks, outgoing SOAP requests, and successful report output remain absent.
 4. On an isolated DEV log directory, exercise permitted size rollover, local-date rollover after midnight, and age retention. Confirm recent same-day archives remain, restore normal limits, and do not modify operational evidence timestamps.
 5. Recycle and replace a release. Confirm normal shutdown flush/append, handles close, logs persist, and report sessions are discarded as documented.
