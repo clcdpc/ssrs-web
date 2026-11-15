@@ -17,12 +17,14 @@ jobs:
       integration_branch: master
       deployment_channel: DEV
       release_workflow: .github/workflows/release.yml
-      deployment_workflow: .github/workflows/deploy-dev.yml
+      deployment_workflow: .github/workflows/deploy-release.yml
       diagnostic_workflow: .github/workflows/diagnose-deployment.yml
       activation_variable: SSRS_DEV_DEPLOYMENT_ENABLED
       runner_group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
       runner_labels: self-hosted,Windows,X64,ssrs-web-dev
-      # Legacy direct deployment has no shared orchestration revision.
+      # The protected-master consumer directly defines its deployment job;
+      # there is no shared orchestration revision. This checker observes only
+      # the retained DEV deployment flag, not every automatic activation gate.
       administrative: false
 
   host:

@@ -51,7 +51,7 @@ Test-Case 'All executable shared code and checkout actions use the reviewed immu
 Test-Case 'Fixed repository, application, target, channel and environment bind both reports' {
     Assert-True ($github.Contains("if: github.repository == 'clcdpc/ssrs-web'"))
     foreach ($pair in @('application_id: ssrs-web','target_id: ssrs-web-dev','environment_name: ssrs-web-dev','integration_branch: master',
-        'deployment_channel: DEV','release_workflow: .github/workflows/release.yml','deployment_workflow: .github/workflows/deploy-dev.yml',
+        'deployment_channel: DEV','release_workflow: .github/workflows/release.yml','deployment_workflow: .github/workflows/deploy-release.yml',
         'diagnostic_workflow: .github/workflows/diagnose-deployment.yml','activation_variable: SSRS_DEV_DEPLOYMENT_ENABLED',
         'runner_group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}','runner_labels: self-hosted,Windows,X64,ssrs-web-dev','administrative: false')) {
         Assert-True ($github.Contains("      $pair`n"))
@@ -175,8 +175,23 @@ exit 37
         }
     }
 }
+Test-Case 'Diagnostic workflow selectors resolve to the current producer and protected consumer' {
+    foreach ($selector in @('release_workflow','deployment_workflow','diagnostic_workflow')) {
+        $path=[regex]::Match($github,"(?m)^      ${selector}: (.+)$").Groups[1].Value
+        Assert-True ($path -and [IO.File]::Exists((Join-Path $repository $path)))
+    }
+    Assert-True (-not [IO.File]::Exists((Join-Path $repository '.github/workflows/deploy-dev.yml')))
+    Assert-True (-not $workflow.Contains('deploy-dev.yml'))
+}
+Test-Case 'Windows CI retains both tag-driven and read-only diagnostic regression suites' {
+    $verify=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/verify.yml')).Replace("`r`n","`n")
+    $windows=[regex]::Match($verify,'(?ms)^  windows-deployment-compatibility:\n.*?(?=^  mock:)').Value
+    foreach ($test in @('Test-DevDeployment.ps1','Test-TagDeployment.ps1','Test-ReleaseArchive.ps1','Test-DeploymentReadiness.ps1','Test-ReleasePackaging.ps1')) {
+        Assert-True ($windows.Contains("./scripts/release/$test"))
+    }
+}
 Test-Case 'No normal release/deployment/verification workflow invokes or depends on the diagnostic' {
-    foreach ($file in @('release.yml','deploy-dev.yml','verify.yml')) {
+    foreach ($file in @('release.yml','deploy-release.yml','verify.yml')) {
         $text=[IO.File]::ReadAllText((Join-Path $repository ".github/workflows/$file"))
         Assert-True ($text -cnotmatch 'diagnose-deployment\.yml|SSRS_DEV_DIAGNOSTIC_RUNNER_READY|Merge-DeploymentReadiness|validate-deployment\.yml')
     }

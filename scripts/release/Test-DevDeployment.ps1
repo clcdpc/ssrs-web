@@ -4,11 +4,8 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-dev.yml'))
-$start=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-BEGIN')
-$end=$workflow.IndexOf('          # SSRS-DEV-FUNCTIONS-END')
-if ($start -lt 0 -or $end -le $start) { throw 'Missing actual inline workflow test boundary.' }
-$functions=[regex]::Replace($workflow.Substring($start,$end-$start),'(?m)^ {10}','')
+$workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-release.yml'))
+$functions=[IO.File]::ReadAllText((Join-Path $repository 'scripts/release/Deployment.Common.ps1'))
 $parseErrors=$null; $null=[Management.Automation.Language.Parser]::ParseInput($functions,[ref]$null,[ref]$parseErrors)
 if ($parseErrors) { throw ($parseErrors | Out-String) }
 . ([ScriptBlock]::Create($functions))
@@ -31,7 +28,8 @@ function Get-TestApproval {
 }
 try {
     Test-Case 'Privileged source/event guards reject an ordinary local or contributor context before host access' {
-        Assert-Fails { Assert-SsrsContext } 'Ssrs.TrustedWorkflowRequired'
+        . "$PSScriptRoot/Invoke-TagDeployment.ps1"
+        Assert-Fails { Invoke-SsrsTagDeploymentEntry } 'FailedSeeRetainedEvidence'
         Assert-Fails { Assert-SsrsSelector '../escape' } 'Ssrs.InvalidSelector'
         Assert-Fails { Assert-SsrsSelector 'target/elsewhere' } 'Ssrs.InvalidSelector'
     }
@@ -167,8 +165,8 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
     }
     Test-Case 'Producer API binding uses exact historical attempt, artifact, repository, source and successful build job' {
         $approval=Get-TestApproval; $repo=@{id=123L;full_name='clcdpc/ssrs-web'}
-        $artifact=@{id=88L;name='ssrs-web-release-42-2';expired=$false;digest=('sha256:'+('4'*64));workflow_run=@{id=42L;repository_id=123L;head_repository_id=123L;head_branch='master';head_sha=('1'*40)}}
-        $run=@{id=42L;run_attempt=2L;head_sha=('1'*40);head_branch='master';path='.github/workflows/release.yml';event='workflow_dispatch';status='completed';conclusion='success';repository=@{id=123L};head_repository=@{id=123L}}
+        $artifact=@{id=88L;name='ssrs-web-release-42-2';expired=$false;digest=('sha256:'+('4'*64));workflow_run=@{id=42L;repository_id=123L;head_repository_id=123L;head_branch='v1.0.0-dev.1';head_sha=('1'*40)}}
+        $run=@{id=42L;run_attempt=2L;head_sha=('1'*40);head_branch='v1.0.0-dev.1';path='.github/workflows/release.yml';event='workflow_dispatch';status='completed';conclusion='success';repository=@{id=123L};head_repository=@{id=123L}}
         $jobs=@{total_count=1L;jobs=@(@{name='release';run_id=42L;run_attempt=2L;head_sha=('1'*40);status='completed';conclusion='success'})}
         Assert-SsrsProvenance $approval $repo $artifact $run $jobs
         foreach ($field in @('run_attempt','head_sha','path','event','conclusion')) {
@@ -228,7 +226,7 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
     }
     Test-Case 'Workflow routing and trust remain external to labels; privileged job has no checkout or source build' {
         $deploy=$workflow.Substring($workflow.IndexOf('  deploy:'))
-        Assert-True ($deploy.Contains('group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}') -and $deploy.Contains('fromJSON(vars.SSRS_DEV_RUNNER_LABELS'))
+        Assert-True ($deploy.Contains('vars.SSRS_DEV_RUNNER_GROUP') -and $deploy.Contains('vars.SSRS_DEV_RUNNER_LABELS'))
         Assert-True (-not ($deploy -match 'uses: actions/checkout|pull_request_target|dotnet publish|npm ci|sqlcmd'))
         Assert-True ($workflow.Contains('@refs/heads/master') -and $workflow.Contains('RUNNER_ADMISSION_READY'))
         Assert-True (-not ($functions -match 'Restore-ClcIisDeployment|Stop-WebAppPool|Start-WebAppPool|Remove-Item|sqlcmd'))
@@ -301,9 +299,9 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
             $global:SsrsTransportTest.calls.Add($Path); $a=$global:SsrsTransportTest.approval
             if ($OutputPath) { [IO.File]::Copy($global:SsrsTransportTest.source,$OutputPath,$false); return }
             if ($Path -ceq '/repos/clcdpc/ssrs-web') { return @{id=123L;full_name='clcdpc/ssrs-web'} }
-            if ($Path.Contains('/artifacts/')) { return @{id=88L;name='ssrs-web-release-42-2';expired=$false;digest=('sha256:'+$a.provenance.transportSha256);workflow_run=@{id=42L;repository_id=123L;head_repository_id=123L;head_branch='master';head_sha=$a.sourceCommit}} }
+            if ($Path.Contains('/artifacts/')) { return @{id=88L;name='ssrs-web-release-42-2';expired=$false;digest=('sha256:'+$a.provenance.transportSha256);workflow_run=@{id=42L;repository_id=123L;head_repository_id=123L;head_branch='v1.0.0-dev.1';head_sha=$a.sourceCommit}} }
             if ($Path.Contains('/jobs?')) { return @{total_count=1L;jobs=@(@{name='release';run_id=42L;run_attempt=2L;head_sha=$a.sourceCommit;status='completed';conclusion='success'})} }
-            return @{id=42L;run_attempt=2L;head_sha=$a.sourceCommit;head_branch='master';path='.github/workflows/release.yml';event='workflow_dispatch';status='completed';conclusion='success';repository=@{id=123L};head_repository=@{id=123L}}
+            return @{id=42L;run_attempt=2L;head_sha=$a.sourceCommit;head_branch='v1.0.0-dev.1';path='.github/workflows/release.yml';event='workflow_dispatch';status='completed';conclusion='success';repository=@{id=123L};head_repository=@{id=123L}}
         }
         $inbox=Join-Path $root 'inbox'; [void][IO.Directory]::CreateDirectory($inbox)
         $selection=@{approval=$a;target=@{artifactInboxRoot=$inbox};module=$testModule;context=@{handles=[Collections.Generic.List[IDisposable]]::new()}}

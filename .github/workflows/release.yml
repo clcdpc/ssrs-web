@@ -1,20 +1,19 @@
 name: Produce immutable SSRS Web release
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      source_commit:
-        description: Exact reviewed 40-character source SHA; must equal this workflow ref's SHA
-        required: true
-        type: string
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 concurrency:
   group: ssrs-web-release-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   release:
-    # Required-review branch protection establishes review; a build grants no approval.
-    if: github.repository == 'clcdpc/ssrs-web' && github.ref == 'refs/heads/master' && github.ref_protected
+    # Hosted production only. The master-owned consumer authenticates this producer.
+    if: github.repository == 'clcdpc/ssrs-web'
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
@@ -23,9 +22,9 @@ jobs:
     steps:
       - name: Require exact immutable selection
         env:
-          SELECTED_COMMIT: ${{ inputs.source_commit }}
+          SELECTED_COMMIT: ${{ github.sha }}
         run: |
-          if ($env:SELECTED_COMMIT -cnotmatch '^[a-f0-9]{40}$' -or $env:SELECTED_COMMIT -cne $env:GITHUB_SHA -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA) { throw 'Release.ExactWorkflowSourceRequired' }
+          if ($env:SELECTED_COMMIT -cnotmatch '^[a-f0-9]{40}$' -or $env:SELECTED_COMMIT -cne $env:GITHUB_SHA -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:GITHUB_REF_TYPE -cne 'tag') { throw 'Release.ExactWorkflowSourceRequired' }
       - name: Isolate exact-byte checkout settings
         shell: pwsh
         run: |
@@ -244,6 +243,16 @@ jobs:
       - name: Run shared exact-source verification
         shell: pwsh
         run: ./scripts/release/Test-ExactSourceBytes.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -Commit $env:GITHUB_SHA
+      - name: Validate exact supported tag and source eligibility
+        env:
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: |
+          . ./scripts/release/TagRelease.Common.ps1
+          $tag=Get-SsrsReleaseTag $env:GITHUB_REF_NAME
+          $target=Resolve-SsrsTag $tag.tag
+          if ($target.sourceCommit -cne $env:GITHUB_SHA) { throw 'Release.Tag.SourceMismatch' }
+          $null=Get-SsrsSourceEligibility $tag $target.sourceCommit $env:GITHUB_EVENT_NAME
+          "RELEASE_TAG_OBJECT=$($target.objectSha)" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Use fresh job-local SDK
         run: '"DOTNET_INSTALL_DIR=$env:RUNNER_TEMP\ssrs-dotnet" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append'
       - name: Authenticate job-local packaging PowerShell
@@ -272,15 +281,25 @@ jobs:
           if ($LASTEXITCODE) { throw 'Release.OrdinaryPublishFailed' }
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ordinary-release-publish
           ./scripts/release/Test-ReleasePackaging.ps1 -OrdinaryPublishDirectory artifacts/ordinary-release-publish
+          ./scripts/release/Test-TagDeployment.ps1
+          ./scripts/release/Test-ReleaseArchive.ps1
+          ./scripts/release/Test-DevDeployment.ps1
           node scripts/check-generated-artifacts.cjs
           if ($LASTEXITCODE) { throw 'Release.GeneratedArtifactPolicyFailed' }
       - name: Build and independently verify release
         id: build
         env:
-          SELECTED_COMMIT: ${{ inputs.source_commit }}
-          # Optional read-only cross-repository asset token; never a deployment identity.
-          TOOLKIT_READ_TOKEN: ${{ secrets.CLC_TOOLKIT_READ_TOKEN }}
+          SELECTED_COMMIT: ${{ github.sha }}
+          # This repository's pinned toolkit is public. PR-tag code gets no secret.
+          TOOLKIT_READ_TOKEN: ''
         run: ./scripts/release/Build-PortalRelease.ps1 -SourceCommit $env:SELECTED_COMMIT
+      - name: Recheck tag identity before publication
+        env:
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: |
+          . ./scripts/release/TagRelease.Common.ps1
+          $target=Resolve-SsrsTag $env:GITHUB_REF_NAME
+          if ($target.sourceCommit -cne $env:GITHUB_SHA -or $target.objectSha -cne $env:RELEASE_TAG_OBJECT) { throw 'Release.Tag.TagMoved' }
       - name: Retain exact release bytes
         id: artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
