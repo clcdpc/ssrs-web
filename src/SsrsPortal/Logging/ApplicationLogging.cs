@@ -13,7 +13,7 @@ namespace SsrsPortal.Logging;
 // Application policy around caller-owned Clc.Logging. Dispose after the host.
 internal sealed class ApplicationLogging : IDisposable
 {
-    private static readonly string[] LogLevelSections = ["Logging:LogLevel", "Logging:NLog:LogLevel", "Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel"];
+    private static readonly string[] ProtocolCategories = ["Microsoft.AspNetCore.Authentication", "Microsoft.IdentityModel"];
     private readonly ClcLogging _logging;
     private readonly SafeLogLayout _layout;
     private LogFactory? _factory;
@@ -71,14 +71,22 @@ internal sealed class ApplicationLogging : IDisposable
         builder.AddClcLogging(_logging);
         // Protocol diagnostics can contain callback credentials. Operators can tune all
         // application categories, but these internals remain at least Warning.
-        var protocolCategories = new[] { "Microsoft.AspNetCore.Authentication", "Microsoft.IdentityModel" };
-        var configuredCategories = LogLevelSections.SelectMany(section => builder.Configuration.GetSection(section).GetChildren()).Select(child => child.Key)
-            .Where(name => protocolCategories.Any(prefix => name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase)));
-        foreach (var category in protocolCategories.Concat(configuredCategories).Distinct(StringComparer.OrdinalIgnoreCase))
+        builder.Services.PostConfigure<LoggerFilterOptions>(options =>
         {
-            builder.Logging.AddFilter<NLogLoggerProvider>(category, level =>
-                level >= Microsoft.Extensions.Logging.LogLevel.Warning && level >= ConfiguredLevel(builder.Configuration, category));
-        }
+            // Preserve native provider/category/wildcard precedence and stricter levels.
+            // The first rule covers native no-match behavior without outranking configured rules.
+            options.Rules.Insert(0, new LoggerFilterRule(null, null, options.MinLevel, null));
+            for (var index = 0; index < options.Rules.Count; index++)
+            {
+                var rule = options.Rules[index];
+                options.Rules[index] = new LoggerFilterRule(rule.ProviderName, rule.CategoryName, rule.LogLevel,
+                    (provider, category, level) =>
+                        (provider != typeof(NLogLoggerProvider).FullName ||
+                         !ProtocolCategories.Any(prefix => category?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true) ||
+                         level >= Microsoft.Extensions.Logging.LogLevel.Warning) &&
+                        (rule.Filter?.Invoke(provider, category, level) ?? true));
+            }
+        });
         builder.Services.AddSingleton(this);
     }
 
@@ -103,18 +111,15 @@ internal sealed class ApplicationLogging : IDisposable
         configuration.AddTarget(asynchronous);
         rule.Targets.Clear();
         rule.Targets.Add(asynchronous);
-    }
-
-    private static Microsoft.Extensions.Logging.LogLevel ConfiguredLevel(IConfiguration configuration, string category)
-    {
-        // Provider-specific child rules must not bypass the floor, or lose an operator's stricter level.
-        return LogLevelSections.Select(section =>
+        // Final safeguard for native factory calls and provider filter misconfiguration.
+        // Add only after wrapping the package's single conventional route.
+        for (var index = 0; index < ProtocolCategories.Length; index++)
         {
-            var setting = configuration.GetSection(section).GetChildren().Where(level => category.StartsWith(level.Key + ".", StringComparison.OrdinalIgnoreCase) ||
-                    category.Equals(level.Key, StringComparison.OrdinalIgnoreCase)).OrderByDescending(level => level.Key.Length).FirstOrDefault()?.Value
-                ?? configuration[section + ":Default"];
-            return Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(setting, true, out var minimum) ? minimum : Microsoft.Extensions.Logging.LogLevel.Information;
-        }).Max();
+            configuration.LoggingRules.Insert(index, new LoggingRule
+            {
+                LoggerNamePattern = ProtocolCategories[index] + "*", FinalMinLevel = NLog.LogLevel.Warn
+            });
+        }
     }
 
     internal void ObserveLifetime(WebApplication app)

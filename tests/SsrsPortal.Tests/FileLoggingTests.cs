@@ -577,7 +577,8 @@ public sealed class FileLoggingTests
         var configuration = logging.Factory.Configuration!;
         var file = configuration.FindTargetByName<FileTarget>("file")!;
         Assert.Same(file.Layout, configuration.FindTargetByName<ConsoleTarget>("stderr")!.Layout);
-        var queue = Assert.IsType<AsyncTargetWrapper>(configuration.LoggingRules.Single().Targets.Single());
+        var route = Assert.Single(configuration.LoggingRules, rule => rule.LoggerNamePattern == "*" && rule.Targets.Count > 0);
+        var queue = Assert.IsType<AsyncTargetWrapper>(route.Targets.Single());
         Assert.Equal(256, queue.QueueLimit); Assert.Equal(AsyncTargetWrapperOverflowAction.Block, queue.OverflowAction);
         Assert.Equal(1, queue.BatchSize); Assert.Equal(10, queue.TimeToSleepBetweenBatches);
         Assert.IsType<FallbackGroupTarget>(queue.WrappedTarget);
@@ -658,6 +659,165 @@ public sealed class FileLoggingTests
         Assert.DoesNotContain("PROVIDER_PROTOCOL_DEBUG_SECRET_SENTINEL", text);
         Assert.Equal(level != "Error", text.Contains("PROVIDER_PROTOCOL_WARNING_SENTINEL", StringComparison.Ordinal));
         Assert.Contains("PROVIDER_PROTOCOL_ERROR_SENTINEL", text);
+    }
+
+    public static IEnumerable<object[]> ProtocolWildcardSettings()
+    {
+        foreach (var section in new[] { "Logging:LogLevel", "Logging:NLog:LogLevel", "Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel" })
+        foreach (var (pattern, category) in new[]
+        {
+            ("Microsoft.IdentityModel*", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft.AspNetCore.Authentication*", "Microsoft.AspNetCore.Authentication.OpenIdConnect.Probe"),
+            ("Microsoft.*.Protocols.Probe", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("*IdentityModel.Protocols.Probe", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft*", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft.IdentityModel*Probe", "microsoft.identitymodel.protocols.probe")
+        })
+        foreach (var level in new[] { "Trace", "Error", "None" })
+        {
+            yield return [section, pattern, category, level];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ProtocolWildcardSettings))]
+    public async Task MicrosoftFiltersPreserveProtocolFloorAndNativeWildcardOperatorLevels(string section, string pattern, string category, string level)
+    {
+        using var fixture = new TestConfigurationFile(new()
+        {
+            [section + ":" + pattern] = level, ["Logging:LogLevel:SsrsPortal"] = "Trace"
+        });
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        await using var services = builder.Services.BuildServiceProvider();
+        // Exercise the primary Microsoft filters independently of the NLog safeguard.
+        var configuration = logging.Factory.Configuration!;
+        foreach (var guard in configuration.LoggingRules.Where(rule => rule.FinalMinLevel is not null).ToArray())
+        {
+            configuration.LoggingRules.Remove(guard);
+        }
+        logging.Factory.ReconfigExistingLoggers();
+        Assert.True(logging.Factory.GetLogger(category).IsTraceEnabled);
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        var logger = factory.CreateLogger(category);
+        Assert.False(logger.IsEnabled(LogLevel.Trace)); Assert.False(logger.IsEnabled(LogLevel.Debug));
+        Assert.False(logger.IsEnabled(LogLevel.Information));
+        Assert.Equal(level == "Trace", logger.IsEnabled(LogLevel.Warning));
+        Assert.Equal(level != "None", logger.IsEnabled(LogLevel.Error));
+        logger.LogTrace("WILDCARD_PROTOCOL_TRACE_SENTINEL"); logger.LogDebug("WILDCARD_PROTOCOL_DEBUG_SENTINEL");
+        logger.LogInformation("WILDCARD_PROTOCOL_INFO_SENTINEL"); logger.LogWarning("WILDCARD_PROTOCOL_WARNING_SENTINEL");
+        logger.LogError("WILDCARD_PROTOCOL_ERROR_SENTINEL"); logger.LogCritical("WILDCARD_PROTOCOL_CRITICAL_SENTINEL");
+        factory.CreateLogger("SsrsPortal.Probe").LogTrace("WILDCARD_APPLICATION_TRACE_SENTINEL");
+        factory.CreateLogger("SsrsPortal.Probe").LogDebug("WILDCARD_APPLICATION_DEBUG_SENTINEL");
+        factory.CreateLogger("System.Net.Http.HttpClient.Probe").LogInformation("WILDCARD_FRAMEWORK_INFO_SENTINEL");
+        factory.CreateLogger("System.Net.Http.HttpClient.Probe").LogWarning("WILDCARD_FRAMEWORK_WARNING_SENTINEL");
+        logging.Flush();
+        var text = ReadDirectory(logging.DirectoryPath);
+        foreach (var suppressed in new[] { "TRACE", "DEBUG", "INFO" })
+        {
+            Assert.DoesNotContain("WILDCARD_PROTOCOL_" + suppressed + "_SENTINEL", text);
+        }
+        Assert.Equal(level == "Trace" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_WARNING_SENTINEL").Count);
+        Assert.Equal(level != "None" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_ERROR_SENTINEL").Count);
+        Assert.Equal(level != "None" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_CRITICAL_SENTINEL").Count);
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_APPLICATION_TRACE_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_APPLICATION_DEBUG_SENTINEL"));
+        Assert.DoesNotContain("WILDCARD_FRAMEWORK_INFO_SENTINEL", text);
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_FRAMEWORK_WARNING_SENTINEL"));
+    }
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("fallback")]
+    [InlineData("disabled")]
+    public async Task NativeNLogProtocolFloorProtectsTheExistingFileAndStderrRoute(string destination)
+    {
+        using var stderr = new StderrCapture();
+        using var fixture = new TestConfigurationFile(new()
+        {
+            ["Logging:File:Enabled"] = (destination != "disabled").ToString(),
+            ["Logging:NLog:LogLevel:Microsoft.IdentityModel*"] = "Trace",
+            ["Logging:NLog:LogLevel:Microsoft.AspNetCore.Authentication*"] = "Trace",
+            ["Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel:Microsoft.IdentityModel*"] = "Trace"
+        });
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        await using var services = builder.Services.BuildServiceProvider();
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        var configuration = logging.Factory.Configuration!;
+        if (destination == "fallback")
+        {
+            var blocked = Path.Combine(logging.DirectoryPath, "blocked"); Directory.CreateDirectory(blocked);
+            configuration.FindTargetByName<FileTarget>("file")!.FileName = Layout.FromLiteral(blocked);
+        }
+        foreach (var category in new[] { "Microsoft.IdentityModel", "Microsoft.IdentityModel.Protocols.Probe", "Microsoft.AspNetCore.Authentication", "Microsoft.AspNetCore.Authentication.OpenIdConnect.Probe" })
+        {
+            var logger = logging.Factory.GetLogger(category);
+            Assert.False(logger.IsTraceEnabled); Assert.False(logger.IsDebugEnabled); Assert.False(logger.IsInfoEnabled);
+            logger.Trace("NATIVE_PROTOCOL_TRACE_SENTINEL"); logger.Debug("NATIVE_PROTOCOL_DEBUG_SENTINEL");
+            logger.Info("NATIVE_PROTOCOL_INFO_SENTINEL"); logger.Warn("NATIVE_PROTOCOL_WARNING_SENTINEL");
+            logger.Error("NATIVE_PROTOCOL_ERROR_SENTINEL"); logger.Fatal("NATIVE_PROTOCOL_FATAL_SENTINEL");
+            var managed = factory.CreateLogger(category);
+            Assert.False(managed.IsEnabled(LogLevel.Trace)); Assert.False(managed.IsEnabled(LogLevel.Debug));
+            managed.LogTrace("MANAGED_PROTOCOL_TRACE_SENTINEL"); managed.LogDebug("MANAGED_PROTOCOL_DEBUG_SENTINEL");
+            managed.LogInformation("MANAGED_PROTOCOL_INFO_SENTINEL"); managed.LogWarning("MANAGED_PROTOCOL_WARNING_SENTINEL");
+            managed.LogError("MANAGED_PROTOCOL_ERROR_SENTINEL");
+        }
+        logging.Factory.GetLogger("SsrsPortal.Probe").Debug("NATIVE_APPLICATION_DEBUG_SENTINEL");
+        logging.Factory.GetLogger("Microsoft.AspNetCore.Probe").Info("NATIVE_FRAMEWORK_INFO_SENTINEL");
+        logging.Flush();
+        var text = destination == "file" ? ReadDirectory(logging.DirectoryPath) : stderr.ToString();
+        foreach (var suppressed in new[] { "TRACE", "DEBUG", "INFO" })
+        {
+            Assert.DoesNotContain("NATIVE_PROTOCOL_" + suppressed + "_SENTINEL", text);
+            Assert.DoesNotContain("MANAGED_PROTOCOL_" + suppressed + "_SENTINEL", text);
+        }
+        foreach (var retained in new[] { "WARNING", "ERROR", "FATAL" })
+        {
+            Assert.Equal(4, Regex.Matches(text, "Message=NATIVE_PROTOCOL_" + retained + "_SENTINEL").Count);
+        }
+        Assert.Single(Regex.Matches(text, "Message=NATIVE_APPLICATION_DEBUG_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=NATIVE_FRAMEWORK_INFO_SENTINEL"));
+        Assert.Equal(4, Regex.Matches(text, "Message=MANAGED_PROTOCOL_WARNING_SENTINEL").Count);
+        Assert.Equal(4, Regex.Matches(text, "Message=MANAGED_PROTOCOL_ERROR_SENTINEL").Count);
+        if (destination == "fallback") { Assert.DoesNotContain("NATIVE_", ReadDirectory(logging.DirectoryPath)); }
+        if (destination == "file") { Assert.DoesNotContain("NATIVE_", stderr.ToString()); }
+    }
+
+    [Fact]
+    public async Task MicrosoftProtocolFloorPreservesNativeNoMatchLevelsOtherProvidersAndExistingPredicates()
+    {
+        using var fixture = new TestConfigurationFile();
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder);
+        var capture = new CaptureProvider(); builder.Logging.AddProvider(capture);
+        builder.Services.Configure<LoggerFilterOptions>(options =>
+        {
+            options.Rules.Clear(); options.MinLevel = LogLevel.Trace;
+            options.Rules.Add(new LoggerFilterRule(null, "Microsoft.IdentityModel.Predicate", null, (_, _, level) => level != LogLevel.Warning));
+        });
+        await using var services = builder.Services.BuildServiceProvider();
+        var configuration = logging.Factory.Configuration!;
+        foreach (var guard in configuration.LoggingRules.Where(rule => rule.FinalMinLevel is not null).ToArray())
+        {
+            configuration.LoggingRules.Remove(guard);
+        }
+        logging.Factory.ReconfigExistingLoggers();
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        factory.CreateLogger("Microsoft.IdentityModel.NoMatch").LogTrace("OTHER_PROVIDER_TRACE_SENTINEL");
+        var predicate = factory.CreateLogger("Microsoft.IdentityModel.Predicate");
+        predicate.LogWarning("EXISTING_PREDICATE_WARNING_SENTINEL"); predicate.LogError("EXISTING_PREDICATE_ERROR_SENTINEL");
+        factory.CreateLogger("SsrsPortal.NoMatch").LogTrace("NO_MATCH_APPLICATION_TRACE_SENTINEL");
+        logging.Flush();
+        var text = ReadDirectory(logging.DirectoryPath);
+        Assert.DoesNotContain("OTHER_PROVIDER_TRACE_SENTINEL", text);
+        Assert.Contains(capture.Messages, message => message.Contains("OTHER_PROVIDER_TRACE_SENTINEL", StringComparison.Ordinal));
+        Assert.DoesNotContain("EXISTING_PREDICATE_WARNING_SENTINEL", text);
+        Assert.Single(Regex.Matches(text, "Message=EXISTING_PREDICATE_ERROR_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=NO_MATCH_APPLICATION_TRACE_SENTINEL"));
     }
 
     [Fact]
