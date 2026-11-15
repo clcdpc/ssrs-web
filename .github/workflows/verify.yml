@@ -149,7 +149,7 @@ jobs:
             $_.FullName -match '[/\\](Logs|TestResults|Fixtures)[/\\]' -or $_.Name -like '*Tests*'
           }
           if ($unexpected) { throw 'Operational configuration, logs and test fixtures must not be published.' }
-          foreach ($assembly in @('NLog.dll', 'NLog.Extensions.Logging.dll')) {
+          foreach ($assembly in @('Clc.Logging.dll', 'Clc.Configuration.dll', 'NLog.dll', 'NLog.Extensions.Logging.dll')) {
             if (!(Test-Path -LiteralPath (Join-Path artifacts/publish $assembly) -PathType Leaf)) { throw "Missing published logging assembly: $assembly" }
           }
       - run: dotnet list SsrsPortal.slnx package --vulnerable --include-transitive

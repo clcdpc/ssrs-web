@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using NLog;
 using NLog.Layouts;
 using NLog.Targets;
+using NLog.Targets.Wrappers;
 using SsrsPortal.Configuration;
 using SsrsPortal.Core;
 using SsrsPortal.Logging;
@@ -18,6 +19,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace SsrsPortal.Tests;
 
+[Collection(EnvironmentSensitiveCollection.Name)] // Actual stderr capture must exclude concurrent tests.
 public sealed class FileLoggingTests
 {
     [Fact]
@@ -65,7 +67,7 @@ public sealed class FileLoggingTests
         var logger = Logger(host); logger.LogDebug("filtered debug sentinel"); logger.LogWarning("retained warning sentinel");
         var text = Read(host);
         Assert.DoesNotContain("filtered debug sentinel", text); Assert.Contains("retained warning sentinel", text);
-        var target = Logging(host).Factory.Configuration!.FindTargetByName<FileTarget>("application-file");
+        var target = Logging(host).Factory.Configuration!.FindTargetByName<FileTarget>("file");
         Assert.NotNull(target);
         Assert.Equal(4096, target.ArchiveAboveSize); Assert.Equal(7, target.MaxArchiveDays);
     }
@@ -87,8 +89,11 @@ public sealed class FileLoggingTests
         var directory = Path.Combine(Path.GetDirectoryName(configuration.Path)!, "Logs");
         Assert.False(Directory.Exists(directory));
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development", Args = ["--SsrsPortal:TestConfigurationFile", configuration.Path] });
-        using var logging = new ApplicationLogging(ApplicationLogging.ResolveDirectory(builder));
-        ExternalConfigurationLoader.AddTo(builder); logging.Configure(builder.Configuration); logging.Register(builder);
+        using var output = new StderrCapture();
+        using var logging = ApplicationLogging.Create(builder);
+        Assert.False(Directory.Exists(directory));
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        builder.Services.AddHostedService<DisposalLoggingService>();
         builder.WebHost.UseSetting("urls", "http://127.0.0.1:0");
         await using (var app = builder.Build())
         {
@@ -99,7 +104,8 @@ public sealed class FileLoggingTests
         }
         logging.Dispose();
         var text = ReadDirectory(directory);
-        Assert.Contains("Application bootstrap started", text); Assert.Contains("Application started", text);
+        Assert.Contains("Application bootstrap started", output.ToString()); Assert.DoesNotContain("Application bootstrap started", text);
+        Assert.Contains("Application started", text); Assert.Contains("SERVICE_STOP_SENTINEL", text); Assert.Contains("SERVICE_DISPOSAL_SENTINEL", text);
         Assert.Contains("Application stopping", text); Assert.Contains("Application stopped", text); Assert.Contains("survives shutdown sentinel", text);
         Assert.All(Directory.GetFiles(directory), path => Assert.Matches(@"ssrs-web-\d{4}-\d{2}-\d{2}(\.\d+)?\.log$", Path.GetFileName(path)));
         // Closed handles permit deletion, as required by fixture cleanup and recycling.
@@ -108,6 +114,11 @@ public sealed class FileLoggingTests
 
     [Theory]
     [InlineData("Logging:File:Rotation", "Hourly")]
+    [InlineData("Logging:File:Rotation", "Daily")]
+    [InlineData("Logging:File:MaxArchiveFiles", "0")]
+    [InlineData("Logging:File:MaxArchiveFiles", "10001")]
+    [InlineData("Logging:File:MaxArchiveFiles", "1.5")]
+    [InlineData("Logging:File:MaxArchiveFiles", "SECRET_ARCHIVE_SENTINEL")]
     [InlineData("Logging:File:RetentionDays", "-1")]
     [InlineData("Logging:File:RetentionDays", "0")]
     [InlineData("Logging:File:RetentionDays", "3651")]
@@ -121,10 +132,12 @@ public sealed class FileLoggingTests
     [InlineData("Logging:LogLevel:SsrsPortal", "1")]
     public async Task InvalidOptionsFailStartupSafelyAndAreCapturedByBootstrap(string key, string value)
     {
+        using var output = new StderrCapture();
         await using var host = new PortalFactory(new() { [key] = value });
         var exception = Assert.Throws<InvalidOperationException>(() => host.Browser());
         Assert.Null(exception.InnerException);
-        var text = ReadDirectory(DirectoryFor(host));
+        var text = output.ToString();
+        Assert.False(Directory.Exists(DirectoryFor(host)));
         Assert.Contains("Application startup or hosting failed", text); Assert.Contains("Logging", text);
         Assert.DoesNotContain("SECRET_", text + exception);
     }
@@ -134,11 +147,13 @@ public sealed class FileLoggingTests
     [InlineData(true)]
     public async Task BootstrapRecordsMissingOrMalformedConfigurationWithoutEchoingSecrets(bool malformed)
     {
+        using var output = new StderrCapture();
         await using var host = new PortalFactory();
         if (malformed) { File.WriteAllText(host.ConfigurationFile.Path, "{\"ClientSecret\":\"SECRET_JSON_SENTINEL\",SECRET_PARSE_SENTINEL}"); }
         else { File.Delete(host.ConfigurationFile.Path); }
         Assert.Throws<InvalidOperationException>(() => host.Browser());
-        var text = ReadDirectory(DirectoryFor(host));
+        var text = output.ToString();
+        Assert.False(Directory.Exists(DirectoryFor(host)));
         Assert.Contains("Application bootstrap started", text); Assert.Contains("Application startup or hosting failed", text);
         Assert.Contains(malformed ? "invalid JSON" : "configuration file is missing", text);
         Assert.DoesNotContain("SECRET_", text);
@@ -149,7 +164,9 @@ public sealed class FileLoggingTests
     public void UnwritableLogDestinationFailsExplicitlyAndHasSafeProcessFallback()
     {
         using var fixture = new TestConfigurationFile();
-        var exception = Assert.Throws<InvalidOperationException>(() => new ApplicationLogging(fixture.Path));
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs"), "collision");
+        using var logging = CreateLogging(fixture, verify: false);
+        var exception = Assert.Throws<InvalidOperationException>(logging.VerifyFileLogging);
         using var output = new StringWriter(); ApplicationLogging.Fallback(exception, output);
         Assert.Contains("Logs", exception.Message); Assert.Contains("permissions", output.ToString());
         Assert.DoesNotContain("ClientSecret", output.ToString());
@@ -158,11 +175,13 @@ public sealed class FileLoggingTests
     [Fact]
     public async Task UnreadableConfigurationIsLoggedBeforeNormalInitialization()
     {
+        using var output = new StderrCapture();
         await using var host = new PortalFactory(new() { ["Entra:ClientSecret"] = "UNREADABLE_SECRET_SENTINEL" });
         using (var locked = File.Open(host.ConfigurationFile.Path, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Assert.Throws<InvalidOperationException>(() => host.Browser());
-            var text = ReadDirectory(DirectoryFor(host));
+            var text = output.ToString();
+            Assert.False(Directory.Exists(DirectoryFor(host)));
             Assert.Contains("configuration file cannot be read", text); Assert.DoesNotContain("UNREADABLE_SECRET_SENTINEL", text);
         }
     }
@@ -170,30 +189,34 @@ public sealed class FileLoggingTests
     [Fact]
     public async Task HostingStartupFailureRetainsExceptionOnceAndFiltersCredentials()
     {
+        using var output = new StderrCapture();
         await using var host = new PortalFactory(configureServices: services => services.AddHostedService<FailingStartupService>());
         var exception = Assert.Throws<InvalidOperationException>(() => host.Browser());
         var text = ReadDirectory(DirectoryFor(host));
         Assert.Contains("Application startup or hosting failed", text); Assert.Contains(nameof(FailingStartupService), text);
         Assert.Single(Regex.Matches(text, "InvalidOperationException: dependency initialization sentinel"));
-        Assert.DoesNotContain("DEPENDENCY_PASSWORD_SENTINEL", text + exception);
+        Assert.DoesNotContain("DEPENDENCY_PASSWORD_SENTINEL", text + exception + output);
     }
 
     [Fact]
     public void RuntimeWriteFailureUsesSafeFallbackAndRecoversWithoutRestart()
     {
-        using var fixture = new TestConfigurationFile(); using var output = new StringWriter();
+        using var fixture = new TestConfigurationFile(); using var output = new StderrCapture();
         var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs");
-        using var logging = new ApplicationLogging(directory, processOutput: output);
-        var target = logging.Factory.Configuration!.FindTargetByName<FileTarget>("application-file")!;
+        using var logging = CreateLogging(fixture);
+        var target = logging.Factory.Configuration!.FindTargetByName<FileTarget>("file")!;
+        var original = target.FileName;
         var blocked = Path.Combine(directory, "blocked"); Directory.CreateDirectory(blocked);
         target.FileName = Layout.FromLiteral(blocked);
         logging.Factory.GetLogger("SsrsPortal.Fallback").Error(new Exception("Useful failure Password=RUNTIME_SECRET_SENTINEL"), "Runtime fallback sentinel");
         logging.Flush();
-        Assert.Contains("persistent file logging write failed", output.ToString()); Assert.Contains("Useful failure", output.ToString());
+        Assert.Contains("Message=Runtime fallback sentinel", output.ToString()); Assert.Contains("Useful failure", output.ToString());
+        Assert.DoesNotContain("Runtime fallback sentinel", ReadDirectory(directory));
         Assert.DoesNotContain("RUNTIME_SECRET_SENTINEL", output.ToString());
-        target.FileName = Path.Combine(directory, "ssrs-web-${shortdate}.log");
+        target.FileName = original;
         logging.Factory.GetLogger("SsrsPortal.Fallback").Warn("FILE_RECOVERED_SENTINEL"); logging.Flush();
         Assert.Contains("FILE_RECOVERED_SENTINEL", ReadDirectory(directory));
+        Assert.DoesNotContain("FILE_RECOVERED_SENTINEL", output.ToString());
     }
 
     [Fact]
@@ -210,7 +233,7 @@ public sealed class FileLoggingTests
         var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs");
         try
         {
-            using var logging = new ApplicationLogging(directory, accessor);
+            using var logging = CreateLogging(fixture, accessor);
             logging.Factory.GetLogger("SsrsPortal.RequestProbe").Error(new Exception("Useful context COOKIE_SECRET_SENTINEL HEADER_SECRET_SENTINEL CSRF_SECRET_SENTINEL OIDC_CODE_SENTINEL OIDC_STATE_SENTINEL"), "Request diagnostic");
             logging.Flush();
             var text = ReadDirectory(directory);
@@ -221,12 +244,15 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
-    public async Task DisablingFileOutputIsExplicitAndDoesNotDisableBootstrapFailureCapture()
+    public async Task DisablingFileOutputUsesSafeStderrWithoutCreatingPersistentFiles()
     {
+        using var output = new StderrCapture();
         await using var host = new PortalFactory(new() { ["Logging:File:Enabled"] = "false" }); using var browser = host.Browser();
         Logger(host).LogWarning("disabled file output sentinel");
-        var text = Read(host);
-        Assert.Contains("Application bootstrap started", text); Assert.DoesNotContain("disabled file output sentinel", text);
+        Logging(host).Flush();
+        var text = output.ToString();
+        Assert.Contains("Application bootstrap started", text); Assert.Contains("disabled file output sentinel", text);
+        Assert.Contains("Persistent file logging disabled", text); Assert.False(Directory.Exists(DirectoryFor(host)));
     }
 
     [Theory]
@@ -353,7 +379,7 @@ public sealed class FileLoggingTests
     {
         using var fixture = new TestConfigurationFile();
         var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs");
-        using var logging = new ApplicationLogging(directory);
+        using var logging = CreateLogging(fixture);
         var children = Enumerable.Range(0, 1000).Select(_ => new CountingMessageException()).ToArray();
         logging.Factory.GetLogger("SsrsPortal.AggregateProbe").Error(new AggregateException("Bounded aggregate diagnostic", children), "Aggregate failure sentinel");
         logging.Flush();
@@ -398,25 +424,27 @@ public sealed class FileLoggingTests
     [Fact]
     public void DailyAndSizeRotationAppendAfterRecycleAndRetainMultipleSameDayFiles()
     {
-        using var fixture = new TestConfigurationFile(); var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs");
-        var options = new FileLoggingOptions { MaxFileSizeBytes = 1024, RetentionDays = 30 };
+        using var fixture = new TestConfigurationFile(new() { ["Logging:File:MaxFileSizeBytes"] = "1024" });
+        var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs");
         var yesterday = DateTime.Now.AddDays(-1);
-        using (var factory = FileFactory(directory, options))
+        using (var logging = CreateLogging(fixture))
         {
-            var logger = factory.GetLogger("SsrsPortal.Rotation");
+            var logger = logging.Factory.GetLogger("SsrsPortal.Rotation");
             logger.Log(new LogEventInfo(NLog.LogLevel.Info, logger.Name, "YESTERDAY_SENTINEL") { TimeStamp = yesterday });
-            for (var i = 0; i < 12; i++) { logger.Info("ROLLOVER_{0:D2} {1}", i, new string('x', 600)); }
+            // Separate completed writes exercise NLog's native size checks, rather than one flush batch.
+            for (var i = 0; i < 12; i++) { logger.Info("ROLLOVER_{0:D2} {1}", i, new string('x', 600)); logging.Flush(); }
         }
         var initial = ReadDirectory(directory);
         Assert.Contains("YESTERDAY_SENTINEL", initial);
         var files = Directory.GetFiles(directory, "*.log"); Assert.True(files.Length >= 4);
         Assert.Contains(files, file => Path.GetFileName(file).Contains(yesterday.ToString("yyyy-MM-dd"), StringComparison.Ordinal));
         Assert.Contains(files, file => Path.GetFileName(file).Contains(DateTime.Now.ToString("yyyy-MM-dd"), StringComparison.Ordinal));
-        using (var factory = FileFactory(directory, options)) { factory.GetLogger("SsrsPortal.Rotation").Info("AFTER_RECYCLE_SENTINEL"); }
+        using (var logging = CreateLogging(fixture)) { logging.Factory.GetLogger("SsrsPortal.Rotation").Info("AFTER_RECYCLE_SENTINEL"); }
         var final = ReadDirectory(directory);
         for (var i = 0; i < 12; i++) { Assert.Single(Regex.Matches(final, "ROLLOVER_" + i.ToString("D2"))); }
         Assert.Contains("AFTER_RECYCLE_SENTINEL", final);
-        Assert.All(Directory.GetFiles(directory, "*.log"), path => Assert.True(new FileInfo(path).Length < 2048));
+        Assert.Contains(Directory.GetFiles(directory), path => Regex.IsMatch(path, @"\.\d{3}\.log$"));
+        Assert.All(Directory.GetFiles(directory, "*.log"), path => Assert.True(new FileInfo(path).Length < 4096));
     }
 
     [Fact]
@@ -429,7 +457,7 @@ public sealed class FileLoggingTests
             var path = Path.Combine(directory, name); File.WriteAllText(path, "OLD_SENTINEL"); File.SetLastWriteTime(path, DateTime.Now.AddDays(-40)); File.SetCreationTime(path, DateTime.Now.AddDays(-40));
         }
         var recent = Path.Combine(directory, "ssrs-web-" + DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd") + ".009.log"); File.WriteAllText(recent, "RECENT_SENTINEL");
-        using (var factory = FileFactory(directory, new FileLoggingOptions())) { factory.GetLogger("SsrsPortal.Retention").Info("CURRENT_SENTINEL"); }
+        using (var logging = CreateLogging(fixture)) { logging.Factory.GetLogger("SsrsPortal.Retention").Info("CURRENT_SENTINEL"); }
         Assert.All(old, name => Assert.False(File.Exists(Path.Combine(directory, name))));
         Assert.True(File.Exists(recent)); Assert.Contains("CURRENT_SENTINEL", ReadDirectory(directory));
     }
@@ -437,14 +465,15 @@ public sealed class FileLoggingTests
     [Fact]
     public void BootstrapCannotDeleteFilesBeforeReadingAnOperatorsLongerRetention()
     {
-        using var fixture = new TestConfigurationFile(); var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs"); Directory.CreateDirectory(directory);
+        using var fixture = new TestConfigurationFile(new() { ["Logging:File:RetentionDays"] = "90" });
+        var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs"); Directory.CreateDirectory(directory);
         var older = Path.Combine(directory, "ssrs-web-" + DateTime.Now.AddDays(-45).ToString("yyyy-MM-dd") + ".009.log");
         File.WriteAllText(older, "RETAIN_LONGER_SENTINEL"); File.SetLastWriteTime(older, DateTime.Now.AddDays(-45)); File.SetCreationTime(older, DateTime.Now.AddDays(-45));
-        using var logging = new ApplicationLogging(directory);
-        Assert.Equal(0, logging.Factory.Configuration!.FindTargetByName<FileTarget>("application-file")!.MaxArchiveDays);
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
         Assert.True(File.Exists(older));
-        using var configuration = (ConfigurationRoot)new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Logging:File:RetentionDays"] = "90" }).Build();
-        logging.Configure(configuration); logging.Flush();
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        Assert.Equal(90, logging.Factory.Configuration!.FindTargetByName<FileTarget>("file")!.MaxArchiveDays);
         Assert.True(File.Exists(older));
     }
 
@@ -452,12 +481,19 @@ public sealed class FileLoggingTests
     [InlineData("null")]
     [InlineData("[]")]
     [InlineData("{}")]
+    [InlineData("true")]
+    [InlineData("123")]
+    [InlineData("\"SECRET_FILE_SHAPE_SENTINEL\"")]
+    [InlineData("{\"Enabled\":[]}")]
+    [InlineData("{\"RetentionDays\":{\"nested\":1}}")]
+    [InlineData("{\"MaxArchiveFiles\":null}")]
     public async Task MalformedFileOptionsObjectsFailWithoutFallbackToDefaults(string json)
     {
         await using var host = new PortalFactory();
         host.ConfigurationFile.Document["Logging"] = System.Text.Json.Nodes.JsonNode.Parse("{\"File\":" + json + "}"); host.ConfigurationFile.Save();
         var exception = Assert.Throws<InvalidOperationException>(() => host.Browser());
         Assert.Contains("Logging:File", exception.Message);
+        Assert.DoesNotContain("SECRET_", exception.ToString());
     }
 
     [Fact]
@@ -476,13 +512,401 @@ public sealed class FileLoggingTests
         Assert.Contains("[truncated]", text);
     }
 
-    private static LogFactory FileFactory(string directory, FileLoggingOptions options)
+    [Theory]
+    [InlineData(null, -1)]
+    [InlineData("17", 17)]
+    public void ArchiveCountPreservesHistoricalDefaultUnlessExplicitlyConfigured(string? setting, int expected)
     {
-        var factory = new LogFactory { AutoShutdown = false, ThrowExceptions = true };
-        var configuration = new NLog.Config.LoggingConfiguration(factory);
-        configuration.AddRuleForAllLevels(ApplicationLogging.CreateFileTarget(directory, options, Layout.FromString("${message}")));
-        factory.Configuration = configuration;
-        return factory;
+        using var fixture = new TestConfigurationFile(setting is null ? null : new() { ["Logging:File:MaxArchiveFiles"] = setting });
+        using var logging = CreateLogging(fixture);
+        Assert.Equal(expected, logging.Factory.Configuration!.FindTargetByName<FileTarget>("file")!.MaxArchiveFiles);
+    }
+
+    [Fact]
+    public void NativeReadinessBypassesMicrosoftNoneAndChecksANewMarkerOnEachAttempt()
+    {
+        using var fixture = new TestConfigurationFile(new() { ["Logging:LogLevel:Default"] = "None", ["Logging:LogLevel:SsrsPortal"] = "None" });
+        using var logging = CreateLogging(fixture);
+        var first = ReadDirectory(logging.DirectoryPath);
+        Assert.Contains("Persistent file logging configured/verified", first);
+        var target = logging.Factory.Configuration!.FindTargetByName<FileTarget>("file")!;
+        var blocked = Path.Combine(logging.DirectoryPath, "blocked"); Directory.CreateDirectory(blocked);
+        target.FileName = Layout.FromLiteral(blocked);
+        using var stderr = new StderrCapture();
+        var error = Assert.Throws<InvalidOperationException>(logging.VerifyFileLogging);
+        Assert.Null(error.InnerException); Assert.Contains("Startup stopped", error.Message);
+        Assert.Contains("logging-ready-", stderr.ToString());
+        Assert.Equal(first, ReadDirectory(logging.DirectoryPath)); // The previous marker cannot satisfy a later probe.
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CurrentFileCollisionOrExclusiveLockPreventsReadiness(bool locked)
+    {
+        using var fixture = new TestConfigurationFile();
+        var directory = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs"); Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "ssrs-web-" + DateTime.Now.ToString("yyyy-MM-dd") + ".log");
+        if (!locked) { Directory.CreateDirectory(path); }
+        using var lease = locked ? new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None) : null;
+        using var logging = CreateLogging(fixture, verify: false);
+        var error = Assert.Throws<InvalidOperationException>(logging.VerifyFileLogging);
+        Assert.Null(error.InnerException); Assert.Contains("permissions, file locks", error.Message);
+    }
+
+    [Fact]
+    public async Task FailedPersistentReadinessNeverStartsHostedServicesOrServesThePortal()
+    {
+        var service = new StartupWitness();
+        await using var host = new PortalFactory(configureServices: services => services.AddSingleton<IHostedService>(service));
+        File.WriteAllText(DirectoryFor(host), "Logs collision");
+        var error = Assert.Throws<InvalidOperationException>(() => host.Browser());
+        Assert.Contains("Persistent file logging cannot write", error.Message);
+        Assert.False(service.Started);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AsyncQueueCapturesRequestAndScopeSecretsOnTheProducingThreadForFileAndFallback(bool fallback)
+    {
+        using var stderr = new StderrCapture();
+        using var fixture = new TestConfigurationFile();
+        var accessor = new HttpContextAccessor();
+        using var logging = CreateLogging(fixture, accessor);
+        var configuration = logging.Factory.Configuration!;
+        var file = configuration.FindTargetByName<FileTarget>("file")!;
+        Assert.Same(file.Layout, configuration.FindTargetByName<ConsoleTarget>("stderr")!.Layout);
+        var route = Assert.Single(configuration.LoggingRules, rule => rule.LoggerNamePattern == "*" && rule.Targets.Count > 0);
+        var queue = Assert.IsType<AsyncTargetWrapper>(route.Targets.Single());
+        Assert.Equal(256, queue.QueueLimit); Assert.Equal(AsyncTargetWrapperOverflowAction.Block, queue.OverflowAction);
+        Assert.Equal(1, queue.BatchSize); Assert.Equal(10, queue.TimeToSleepBetweenBatches);
+        Assert.IsType<FallbackGroupTarget>(queue.WrappedTarget);
+        if (fallback)
+        {
+            var blocked = Path.Combine(logging.DirectoryPath, "blocked"); Directory.CreateDirectory(blocked);
+            file.FileName = Layout.FromLiteral(blocked);
+        }
+        var request = new DefaultHttpContext { TraceIdentifier = "QUEUED_TRACE_SENTINEL" };
+        request.Request.Headers.Cookie = "session=REQUEST_ONLY_SECRET_SENTINEL";
+        accessor.HttpContext = request;
+        try
+        {
+            using (ScopeContext.PushProperty("Password", "SCOPE_ONLY_SECRET_SENTINEL"))
+            using (ScopeContext.PushNestedState("QUEUED_SCOPE_SENTINEL"))
+            {
+                logging.Factory.GetLogger("SsrsPortal.AsyncProbe").Error(
+                    new Exception("Useful queued failure REQUEST_ONLY_SECRET_SENTINEL SCOPE_ONLY_SECRET_SENTINEL"), "Queued diagnostic sentinel");
+            }
+        }
+        finally { accessor.HttpContext = null; }
+        logging.Flush();
+        var text = fallback ? stderr.ToString() : ReadDirectory(logging.DirectoryPath);
+        Assert.Contains("Useful queued failure", text); Assert.Contains("QUEUED_TRACE_SENTINEL", text); Assert.Contains("QUEUED_SCOPE_SENTINEL", text);
+        Assert.DoesNotContain("REQUEST_ONLY_SECRET_SENTINEL", text); Assert.DoesNotContain("SCOPE_ONLY_SECRET_SENTINEL", text);
+    }
+
+    [Fact]
+    public async Task ProductionRegistrationClearsDefaultProvidersAndAddsOneNLogProviderWhileFixturesRetainCapture()
+    {
+        using var fixture = new TestConfigurationFile();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development", Args = ["--SsrsPortal:TestConfigurationFile", fixture.Path] });
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        await using (var app = builder.Build())
+        {
+            Assert.IsType<NLog.Extensions.Logging.NLogLoggerProvider>(Assert.Single(app.Services.GetServices<ILoggerProvider>()));
+            app.Services.GetRequiredService<ILogger<FileLoggingTests>>().LogWarning("SINGLE_PROVIDER_SENTINEL");
+            logging.Flush();
+            Assert.Single(Regex.Matches(ReadDirectory(logging.DirectoryPath), "Message=SINGLE_PROVIDER_SENTINEL"));
+        }
+        await using var host = new PortalFactory(); using var browser = host.Browser();
+        var providers = host.Services.GetServices<ILoggerProvider>().ToArray();
+        Assert.Equal(2, providers.Length); Assert.Single(providers.OfType<NLog.Extensions.Logging.NLogLoggerProvider>());
+        Assert.Contains(host.Logs, providers);
+        Logger(host).LogWarning("CAPTURE_PROVIDER_SENTINEL"); Assert.Contains(host.Logs.Messages, message => message.Contains("CAPTURE_PROVIDER_SENTINEL", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Microsoft.AspNetCore.Authentication.OpenIdConnect", "Trace")]
+    [InlineData("Microsoft.IdentityModel.Protocols", "Debug")]
+    [InlineData("Microsoft.IdentityModel.Protocols", "Error")]
+    public async Task ExplicitProtocolChildCategoriesCannotBypassFloorOrStricterLevels(string category, string level)
+    {
+        await using var host = new PortalFactory(new() { ["Logging:LogLevel:" + category] = level }); using var browser = host.Browser();
+        var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger(category + ".Probe");
+        logger.LogTrace("PROTOCOL_TRACE_SECRET_SENTINEL"); logger.LogDebug("PROTOCOL_DEBUG_SECRET_SENTINEL");
+        logger.LogWarning("PROTOCOL_WARNING_SENTINEL"); logger.LogError("PROTOCOL_ERROR_SENTINEL");
+        var text = Read(host);
+        Assert.DoesNotContain("PROTOCOL_TRACE_SECRET_SENTINEL", text); Assert.DoesNotContain("PROTOCOL_DEBUG_SECRET_SENTINEL", text);
+        Assert.Equal(level != "Error", text.Contains("PROTOCOL_WARNING_SENTINEL", StringComparison.Ordinal));
+        Assert.Contains("PROTOCOL_ERROR_SENTINEL", text);
+    }
+
+    [Theory]
+    [InlineData("NLog", "Trace")]
+    [InlineData("NLog", "Error")]
+    [InlineData("NLog.Extensions.Logging.NLogLoggerProvider", "Trace")]
+    [InlineData("NLog.Extensions.Logging.NLogLoggerProvider", "Error")]
+    public async Task ProviderSpecificProtocolSettingsStillRespectSecurityAndOperatorFloors(string provider, string level)
+    {
+        await using var host = new PortalFactory(new() { ["Logging:" + provider + ":LogLevel:Microsoft.IdentityModel.Protocols"] = level });
+        using var browser = host.Browser();
+        var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Microsoft.IdentityModel.Protocols.Probe");
+        logger.LogDebug("PROVIDER_PROTOCOL_DEBUG_SECRET_SENTINEL"); logger.LogWarning("PROVIDER_PROTOCOL_WARNING_SENTINEL");
+        logger.LogError("PROVIDER_PROTOCOL_ERROR_SENTINEL");
+        var text = Read(host);
+        Assert.DoesNotContain("PROVIDER_PROTOCOL_DEBUG_SECRET_SENTINEL", text);
+        Assert.Equal(level != "Error", text.Contains("PROVIDER_PROTOCOL_WARNING_SENTINEL", StringComparison.Ordinal));
+        Assert.Contains("PROVIDER_PROTOCOL_ERROR_SENTINEL", text);
+    }
+
+    public static IEnumerable<object[]> ProtocolWildcardSettings()
+    {
+        foreach (var section in new[] { "Logging:LogLevel", "Logging:NLog:LogLevel", "Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel" })
+        foreach (var (pattern, category) in new[]
+        {
+            ("Microsoft.IdentityModel*", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft.AspNetCore.Authentication*", "Microsoft.AspNetCore.Authentication.OpenIdConnect.Probe"),
+            ("Microsoft.*.Protocols.Probe", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("*IdentityModel.Protocols.Probe", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft*", "Microsoft.IdentityModel.Protocols.Probe"),
+            ("Microsoft.IdentityModel*Probe", "microsoft.identitymodel.protocols.probe")
+        })
+        foreach (var level in new[] { "Trace", "Error", "None" })
+        {
+            yield return [section, pattern, category, level];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ProtocolWildcardSettings))]
+    public async Task MicrosoftFiltersPreserveProtocolFloorAndNativeWildcardOperatorLevels(string section, string pattern, string category, string level)
+    {
+        using var fixture = new TestConfigurationFile(new()
+        {
+            [section + ":" + pattern] = level, ["Logging:LogLevel:SsrsPortal"] = "Trace"
+        });
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        await using var services = builder.Services.BuildServiceProvider();
+        // Exercise the primary Microsoft filters independently of the NLog safeguard.
+        var configuration = logging.Factory.Configuration!;
+        foreach (var guard in configuration.LoggingRules.Where(rule => rule.FinalMinLevel is not null).ToArray())
+        {
+            configuration.LoggingRules.Remove(guard);
+        }
+        logging.Factory.ReconfigExistingLoggers();
+        Assert.True(logging.Factory.GetLogger(category).IsTraceEnabled);
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        var logger = factory.CreateLogger(category);
+        Assert.False(logger.IsEnabled(LogLevel.Trace)); Assert.False(logger.IsEnabled(LogLevel.Debug));
+        Assert.False(logger.IsEnabled(LogLevel.Information));
+        Assert.Equal(level == "Trace", logger.IsEnabled(LogLevel.Warning));
+        Assert.Equal(level != "None", logger.IsEnabled(LogLevel.Error));
+        logger.LogTrace("WILDCARD_PROTOCOL_TRACE_SENTINEL"); logger.LogDebug("WILDCARD_PROTOCOL_DEBUG_SENTINEL");
+        logger.LogInformation("WILDCARD_PROTOCOL_INFO_SENTINEL"); logger.LogWarning("WILDCARD_PROTOCOL_WARNING_SENTINEL");
+        logger.LogError("WILDCARD_PROTOCOL_ERROR_SENTINEL"); logger.LogCritical("WILDCARD_PROTOCOL_CRITICAL_SENTINEL");
+        factory.CreateLogger("SsrsPortal.Probe").LogTrace("WILDCARD_APPLICATION_TRACE_SENTINEL");
+        factory.CreateLogger("SsrsPortal.Probe").LogDebug("WILDCARD_APPLICATION_DEBUG_SENTINEL");
+        factory.CreateLogger("System.Net.Http.HttpClient.Probe").LogInformation("WILDCARD_FRAMEWORK_INFO_SENTINEL");
+        factory.CreateLogger("System.Net.Http.HttpClient.Probe").LogWarning("WILDCARD_FRAMEWORK_WARNING_SENTINEL");
+        logging.Flush();
+        var text = ReadDirectory(logging.DirectoryPath);
+        foreach (var suppressed in new[] { "TRACE", "DEBUG", "INFO" })
+        {
+            Assert.DoesNotContain("WILDCARD_PROTOCOL_" + suppressed + "_SENTINEL", text);
+        }
+        Assert.Equal(level == "Trace" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_WARNING_SENTINEL").Count);
+        Assert.Equal(level != "None" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_ERROR_SENTINEL").Count);
+        Assert.Equal(level != "None" ? 1 : 0, Regex.Matches(text, "Message=WILDCARD_PROTOCOL_CRITICAL_SENTINEL").Count);
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_APPLICATION_TRACE_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_APPLICATION_DEBUG_SENTINEL"));
+        Assert.DoesNotContain("WILDCARD_FRAMEWORK_INFO_SENTINEL", text);
+        Assert.Single(Regex.Matches(text, "Message=WILDCARD_FRAMEWORK_WARNING_SENTINEL"));
+    }
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("fallback")]
+    [InlineData("disabled")]
+    public async Task NativeNLogProtocolFloorProtectsTheExistingFileAndStderrRoute(string destination)
+    {
+        using var stderr = new StderrCapture();
+        using var fixture = new TestConfigurationFile(new()
+        {
+            ["Logging:File:Enabled"] = (destination != "disabled").ToString(),
+            ["Logging:NLog:LogLevel:Microsoft.IdentityModel*"] = "Trace",
+            ["Logging:NLog:LogLevel:Microsoft.AspNetCore.Authentication*"] = "Trace",
+            ["Logging:NLog.Extensions.Logging.NLogLoggerProvider:LogLevel:Microsoft.IdentityModel*"] = "Trace"
+        });
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        await using var services = builder.Services.BuildServiceProvider();
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        var configuration = logging.Factory.Configuration!;
+        if (destination == "fallback")
+        {
+            var blocked = Path.Combine(logging.DirectoryPath, "blocked"); Directory.CreateDirectory(blocked);
+            configuration.FindTargetByName<FileTarget>("file")!.FileName = Layout.FromLiteral(blocked);
+        }
+        foreach (var category in new[] { "Microsoft.IdentityModel", "Microsoft.IdentityModel.Protocols.Probe", "Microsoft.AspNetCore.Authentication", "Microsoft.AspNetCore.Authentication.OpenIdConnect.Probe" })
+        {
+            var logger = logging.Factory.GetLogger(category);
+            Assert.False(logger.IsTraceEnabled); Assert.False(logger.IsDebugEnabled); Assert.False(logger.IsInfoEnabled);
+            logger.Trace("NATIVE_PROTOCOL_TRACE_SENTINEL"); logger.Debug("NATIVE_PROTOCOL_DEBUG_SENTINEL");
+            logger.Info("NATIVE_PROTOCOL_INFO_SENTINEL"); logger.Warn("NATIVE_PROTOCOL_WARNING_SENTINEL");
+            logger.Error("NATIVE_PROTOCOL_ERROR_SENTINEL"); logger.Fatal("NATIVE_PROTOCOL_FATAL_SENTINEL");
+            var managed = factory.CreateLogger(category);
+            Assert.False(managed.IsEnabled(LogLevel.Trace)); Assert.False(managed.IsEnabled(LogLevel.Debug));
+            managed.LogTrace("MANAGED_PROTOCOL_TRACE_SENTINEL"); managed.LogDebug("MANAGED_PROTOCOL_DEBUG_SENTINEL");
+            managed.LogInformation("MANAGED_PROTOCOL_INFO_SENTINEL"); managed.LogWarning("MANAGED_PROTOCOL_WARNING_SENTINEL");
+            managed.LogError("MANAGED_PROTOCOL_ERROR_SENTINEL");
+        }
+        logging.Factory.GetLogger("SsrsPortal.Probe").Debug("NATIVE_APPLICATION_DEBUG_SENTINEL");
+        logging.Factory.GetLogger("Microsoft.AspNetCore.Probe").Info("NATIVE_FRAMEWORK_INFO_SENTINEL");
+        logging.Flush();
+        var text = destination == "file" ? ReadDirectory(logging.DirectoryPath) : stderr.ToString();
+        foreach (var suppressed in new[] { "TRACE", "DEBUG", "INFO" })
+        {
+            Assert.DoesNotContain("NATIVE_PROTOCOL_" + suppressed + "_SENTINEL", text);
+            Assert.DoesNotContain("MANAGED_PROTOCOL_" + suppressed + "_SENTINEL", text);
+        }
+        foreach (var retained in new[] { "WARNING", "ERROR", "FATAL" })
+        {
+            Assert.Equal(4, Regex.Matches(text, "Message=NATIVE_PROTOCOL_" + retained + "_SENTINEL").Count);
+        }
+        Assert.Single(Regex.Matches(text, "Message=NATIVE_APPLICATION_DEBUG_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=NATIVE_FRAMEWORK_INFO_SENTINEL"));
+        Assert.Equal(4, Regex.Matches(text, "Message=MANAGED_PROTOCOL_WARNING_SENTINEL").Count);
+        Assert.Equal(4, Regex.Matches(text, "Message=MANAGED_PROTOCOL_ERROR_SENTINEL").Count);
+        if (destination == "fallback") { Assert.DoesNotContain("NATIVE_", ReadDirectory(logging.DirectoryPath)); }
+        if (destination == "file") { Assert.DoesNotContain("NATIVE_", stderr.ToString()); }
+    }
+
+    [Fact]
+    public async Task MicrosoftProtocolFloorPreservesNativeNoMatchLevelsOtherProvidersAndExistingPredicates()
+    {
+        using var fixture = new TestConfigurationFile();
+        var builder = LoggingBuilder(fixture);
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder);
+        var capture = new CaptureProvider(); builder.Logging.AddProvider(capture);
+        builder.Services.Configure<LoggerFilterOptions>(options =>
+        {
+            options.Rules.Clear(); options.MinLevel = LogLevel.Trace;
+            options.Rules.Add(new LoggerFilterRule(null, "Microsoft.IdentityModel.Predicate", null, (_, _, level) => level != LogLevel.Warning));
+        });
+        await using var services = builder.Services.BuildServiceProvider();
+        var configuration = logging.Factory.Configuration!;
+        foreach (var guard in configuration.LoggingRules.Where(rule => rule.FinalMinLevel is not null).ToArray())
+        {
+            configuration.LoggingRules.Remove(guard);
+        }
+        logging.Factory.ReconfigExistingLoggers();
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        factory.CreateLogger("Microsoft.IdentityModel.NoMatch").LogTrace("OTHER_PROVIDER_TRACE_SENTINEL");
+        var predicate = factory.CreateLogger("Microsoft.IdentityModel.Predicate");
+        predicate.LogWarning("EXISTING_PREDICATE_WARNING_SENTINEL"); predicate.LogError("EXISTING_PREDICATE_ERROR_SENTINEL");
+        factory.CreateLogger("SsrsPortal.NoMatch").LogTrace("NO_MATCH_APPLICATION_TRACE_SENTINEL");
+        logging.Flush();
+        var text = ReadDirectory(logging.DirectoryPath);
+        Assert.DoesNotContain("OTHER_PROVIDER_TRACE_SENTINEL", text);
+        Assert.Contains(capture.Messages, message => message.Contains("OTHER_PROVIDER_TRACE_SENTINEL", StringComparison.Ordinal));
+        Assert.DoesNotContain("EXISTING_PREDICATE_WARNING_SENTINEL", text);
+        Assert.Single(Regex.Matches(text, "Message=EXISTING_PREDICATE_ERROR_SENTINEL"));
+        Assert.Single(Regex.Matches(text, "Message=NO_MATCH_APPLICATION_TRACE_SENTINEL"));
+    }
+
+    [Fact]
+    public void FileNameTreatsNLogSyntaxInTheApplicationDirectoryAsLiteral()
+    {
+        using var fixture = new TestConfigurationFile();
+        var root = Path.GetDirectoryName(fixture.Path)!;
+        var directory = Path.Combine(root, "literal-${level}"); Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "application.json"); File.Copy(fixture.Path, path);
+        var builder = LoggingBuilder(fixture); builder.Configuration[ExternalConfigurationLoader.TestFileKey] = path;
+        using var logging = ApplicationLogging.Create(builder);
+        ExternalConfigurationLoader.AddTo(builder); logging.Register(builder); logging.VerifyFileLogging();
+        Assert.Equal(Path.Combine(directory, "Logs"), logging.DirectoryPath);
+        Assert.Contains("logging-ready-", ReadDirectory(logging.DirectoryPath));
+        Assert.False(Directory.Exists(Path.Combine(root, "literal-Info")));
+    }
+
+    [Fact]
+    public void ExplicitFileDisablementBypassesEvenAnUnavailableLogsDirectory()
+    {
+        using var stderr = new StderrCapture();
+        using var fixture = new TestConfigurationFile(new() { ["Logging:File:Enabled"] = "false" });
+        var collision = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "Logs"); File.WriteAllText(collision, "collision");
+        using var logging = CreateLogging(fixture);
+        logging.Factory.GetLogger("SsrsPortal.Disabled").Warn("DISABLED_AVAILABLE_SENTINEL"); logging.Flush();
+        Assert.Contains("DISABLED_AVAILABLE_SENTINEL", stderr.ToString()); Assert.Equal("collision", File.ReadAllText(collision));
+    }
+
+    [Fact]
+    public async Task FatalBypassesNoneAndRedactsConfiguredSecretFromRawDependencyExceptionAndHostingOutput()
+    {
+        using var stderr = new StderrCapture();
+        await using var host = new PortalFactory(new()
+        {
+            ["Entra:ClientSecret"] = "STARTUP_CONFIGURED_SECRET_SENTINEL", ["Logging:LogLevel:Default"] = "None", ["Logging:LogLevel:SsrsPortal"] = "None"
+        }, configureServices: services => services.AddHostedService<SecretStartupService>());
+        var error = Assert.Throws<InvalidOperationException>(() => host.Browser());
+        var text = ReadDirectory(DirectoryFor(host));
+        Assert.Contains("Useful configured-secret failure", text); Assert.Contains("Application startup or hosting failed", text);
+        Assert.Null(error.InnerException); Assert.DoesNotContain("STARTUP_CONFIGURED_SECRET_SENTINEL", text + error + stderr);
+    }
+
+    private sealed class SecretStartupService(SsrsPortal.Security.EntraOptions entra) : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => throw new InvalidOperationException("Useful configured-secret failure " + entra.ClientSecret);
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class StartupWitness : IHostedService
+    {
+        internal bool Started { get; private set; }
+        public Task StartAsync(CancellationToken cancellationToken) { Started = true; return Task.CompletedTask; }
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private static WebApplicationBuilder LoggingBuilder(TestConfigurationFile fixture)
+    {
+        var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { [ExternalConfigurationLoader.TestFileKey] = fixture.Path });
+        return builder;
+    }
+
+    private static ApplicationLogging CreateLogging(TestConfigurationFile fixture, IHttpContextAccessor? requests = null, bool verify = true)
+    {
+        var builder = LoggingBuilder(fixture);
+        var logging = ApplicationLogging.Create(builder, requests);
+        try
+        {
+            ExternalConfigurationLoader.AddTo(builder); logging.Register(builder);
+            if (verify) { logging.VerifyFileLogging(); }
+            return logging;
+        }
+        catch { logging.Dispose(); throw; }
+    }
+
+    private sealed class StderrCapture : IDisposable
+    {
+        private readonly TextWriter _previous = Console.Error;
+        private readonly StringWriter _output = new();
+        internal StderrCapture() { Console.SetError(TextWriter.Synchronized(_output)); }
+        public override string ToString() => _output.ToString();
+        public void Dispose() { Console.SetError(_previous); _output.Dispose(); }
+    }
+
+    private sealed class DisposalLoggingService(ILogger<DisposalLoggingService> logger) : IHostedService, IDisposable
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) { logger.LogWarning("SERVICE_STOP_SENTINEL"); return Task.CompletedTask; }
+        public void Dispose() => logger.LogWarning("SERVICE_DISPOSAL_SENTINEL");
     }
 
     private static Exception ThrownException()

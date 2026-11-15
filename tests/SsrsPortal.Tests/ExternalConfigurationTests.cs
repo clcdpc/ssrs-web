@@ -25,6 +25,40 @@ public sealed class EnvironmentSensitiveCollection
 [Collection(EnvironmentSensitiveCollection.Name)]
 public sealed class ExternalConfigurationTests
 {
+    [Theory]
+    [InlineData("MaxArchiveFiles", "1", true)]
+    [InlineData("MaxArchiveFiles", "10000", true)]
+    [InlineData("MaxArchiveFiles", "-1", false)]
+    [InlineData("MaxArchiveFiles", "0", false)]
+    [InlineData("MaxArchiveFiles", "10001", false)]
+    [InlineData("MaxArchiveFiles", "1.5", false)]
+    [InlineData("RetentionDays", "+2", false)]
+    [InlineData("MaxFileSizeBytes", "1024", true)]
+    [InlineData("MaxFileSizeBytes", "1073741824", true)]
+    [InlineData("Rotation", "Daily", false)]
+    public async Task ReadOnlyDeploymentConfigurationAndStartupAgreeOnFileOptions(string setting, string value, bool accepted)
+    {
+        await using var factory = new PortalFactory(new() { ["Logging:File:" + setting] = value });
+        var bytes = File.ReadAllBytes(factory.ConfigurationFile.Path);
+        using var snapshot = ExternalConfigurationLoader.Load(factory.ConfigurationFile.Path);
+        var directory = Path.Combine(Path.GetDirectoryName(factory.ConfigurationFile.Path)!, "Logs");
+        if (accepted)
+        {
+            _ = ApplicationConfiguration.Read(snapshot, development: true);
+            Assert.False(Directory.Exists(directory));
+            using var browser = factory.Browser();
+        }
+        else
+        {
+            var validationError = Assert.Throws<InvalidOperationException>(() => ApplicationConfiguration.Read(snapshot, development: true));
+            Assert.False(Directory.Exists(directory));
+            var startupError = Assert.Throws<InvalidOperationException>(() => factory.Browser());
+            Assert.Equal(validationError.Message, startupError.Message);
+            Assert.False(Directory.Exists(directory));
+        }
+        Assert.Equal(bytes, File.ReadAllBytes(factory.ConfigurationFile.Path));
+    }
+
     [Fact]
     public void NormalPathUsesCommonApplicationDataAndHasNoEnvironmentSpecificSuffix()
     {
@@ -503,8 +537,9 @@ public sealed class ExternalConfigurationTests
             Assert.Equal(2, entra.AllowedTenantIds.Length);
             Assert.Equal("localhost", app.Configuration["AllowedHosts"]);
             Assert.Equal("Information", app.Configuration["Logging:LogLevel:Default"]);
-            var logging = Logging.FileLoggingOptions.Read(app.Configuration);
-            Assert.True(logging.Enabled); Assert.Equal(30, logging.RetentionDays);
+            Logging.FileLoggingOptions.Validate(app.Configuration);
+            Assert.Null(app.Configuration["Logging:File:Enabled"]);
+            Assert.Null(app.Configuration["Logging:File:RetentionDays"]);
             Assert.Equal("http://127.0.0.1:41234", app.Configuration[WebHostDefaults.ServerUrlsKey]);
             Assert.True(app.Environment.IsDevelopment());
         }

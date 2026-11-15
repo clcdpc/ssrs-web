@@ -6,6 +6,8 @@ Staff in approved Microsoft Entra tenants need the `ReportViewer` role. Everyone
 
 Optional [subscriptions](docs/operations/subscriptions.md) use SQL Server, Hangfire, and Postmark without archiving output. The optional read-only [SQL monitor](docs/operations/catalog-monitor.md) refreshes catalog metadata; it never grants access.
 
+[Logging](docs/operations/troubleshooting.md#persistent-file-logging) uses Clc.Logging for NLog infrastructure and application-owned SafeLogLayout sanitization. Bootstrap is stderr-only; configured startup verifies an actual persistent write before serving requests. Existing `ssrs-web-yyyy-MM-dd.log` filenames, 50 MiB rollover and 30-day retention remain. Remove legacy `Logging:File:Rotation` from deployed configuration before upgrading; daily rotation is automatic, and optional `MaxArchiveFiles` defaults to the historical unlimited count when omitted.
+
 ## Verification
 
 Install the SDK in [global.json](global.json), PowerShell 7+, and Node.js 24 (the CI version). Run from the repository root:
