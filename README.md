@@ -61,7 +61,7 @@ Subscriptions are disabled by default. Follow [local subscription setup](docs/op
 
 - [Operations](docs/operations/README.md) and [troubleshooting](docs/operations/troubleshooting.md): configuration, IIS, Entra, logs, and diagnostics.
 - [Report workspace](docs/behavior/report-workspace.md), [expand/collapse](docs/behavior/report-expand-collapse.md), and [branding](docs/behavior/ssrs-branding.md): current behavior and limits.
-- [Deployment](docs/clc-deployment.md): releases, recovery, qualification status, and outstanding host checks.
+- [Deployment](docs/clc-deployment.md): releases, recovery, qualification status, and outstanding host checks; [manual prerequisite diagnostics](docs/clc-deployment.md#read-only-deployment-prerequisite-validation).
 - [SOAP and renderer fixtures](tests/SsrsPortal.Tests/Fixtures/README.md): protocol expectations and synthetic coverage.
 
 ## Live acceptance

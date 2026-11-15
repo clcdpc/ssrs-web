@@ -77,6 +77,38 @@ Infrastructure supplies:
 
 Keep application, Config, Keys, Inbox, enrollment/control, bootstrap, authorization, backups and Logs physically disjoint as required. The workflow checks protected paths/owners, reparses/hard links, executable inventory and retained distribution hashes **before** evaluating bootstrap code, holding leases through execution. A sidecar or self-verifier cannot establish initial trust. Build, bootstrap and active-host toolkit pins are separate; changing the build pin never upgrades the host.
 
+## Read-only deployment prerequisite validation
+
+Run **Validate SSRS Web deployment prerequisites** ([diagnose-deployment.yml](../.github/workflows/diagnose-deployment.yml)) during initial commissioning, target onboarding, host migration, infrastructure changes or deployment troubleshooting. In GitHub **Actions**, select that workflow, choose **Run workflow**, select protected **master**, and run it without inputs. It becomes available after merge. It is optional and manual-only; normal releases and deployments do not depend on its result.
+
+The three independent stages are hosted GitHub configuration inspection (`github`), separately admitted read-only Windows/IIS inspection (`host`), and hosted report-contract-3 aggregation (`report`), which runs even after failed or skipped inspections. All diagnostic code is pinned to clc-deployment commit [`4df8d5158cd363c47d4e232af871fb395ea14c2c`](https://github.com/clcdpc/clc-deployment/tree/4df8d5158cd363c47d4e232af871fb395ea14c2c). Referencing its reusable GitHub workflow needs no new NuGet or toolkit release. That diagnostic source is separate from the independently installed host toolkit; checkout never installs or upgrades the latter.
+
+Before enabling the host stage, infrastructure must independently:
+
+- Retain `clcdpc/ssrs-web/.github/workflows/deploy-dev.yml@refs/heads/master` in the existing dedicated group's **Selected workflows** admission list and additionally allow exactly `clcdpc/ssrs-web/.github/workflows/diagnose-deployment.yml@refs/heads/master`. Keep selected-repository/public-repository restrictions; do not use repository/workflow wildcards, All workflows or All repositories. The exact directly defined consumer host job must be admitted. No group settings are changed by this workflow.
+- Verify `SSRS_DEV_RUNNER_GROUP` and the existing JSON `SSRS_DEV_RUNNER_LABELS` select that dedicated enrolled host. The hosted inspection expects comma-separated `self-hosted,Windows,X64,ssrs-web-dev`; if actual independently configured labels differ, reconcile the reviewed workflow configuration before enabling inspection. Labels alone never authorize privileged execution.
+- Verify the active protected host-policy toolkit pin and the reviewed manifest selector `C:\ProgramData\CLC\Deployment\Enrollment\toolkit\versions\0.1.0-beta.3\CLC.Deployment\CLC.Deployment.psd1`. The tracked [lock](../deployment/toolkit.lock.json) pins beta.3 at `a3a94cd26daa583d392f73e99e56872876a88467`; the path is an expectation, not evidence of installation or checker compatibility. Trusted upstream code authenticates protected installation policy and installed bytes before module import. Missing/incompatible toolkit evidence is reported, with no search, alternate download, fallback, upgrade or re-enrollment.
+- Inspect and reconcile the enrollment identity separately: the tracked example has `environmentName: DEV`, while the GitHub environment and both diagnostic reports use `ssrs-web-dev`. There is no silent translation. Existing enrollment is unchanged; this mismatch must be resolved under separate infrastructure authority before the host stage can PASS.
+- Only after these prerequisites are independently established, set the optional repository variable `SSRS_DEV_DIAGNOSTIC_RUNNER_READY` to exactly `true`. Absent or other values skip host inspection. This rollout indicator is not an authorization boundary and does not replace selected-workflow admission. The job also requires the exact repository, manual event, protected master ref, workflow identity and matching source/workflow SHA, and retains all existing `ssrs-web-dev` environment protections. No additional environment or approval policy is created.
+
+`SSRS_DEV_DEPLOYMENT_ENABLED` may remain `false` during commissioning: diagnosis does not require deployment activation, release approval, authorization IDs, standing authorization or first cutover. Existing deployment activation and `SSRS_DEV_RUNNER_ADMISSION_READY` retain their existing meanings. The host uses the independently provisioned PowerShell 7.6.6 executable, checks out only the reviewed upstream diagnostic, and receives no deployment credentials or administrative token. It executes no application checkout, build, validation, hooks, deployment, repair, recovery, SQL or setup. Observations authorize nothing and change no GitHub, enrollment, IIS or application state.
+
+The combined Actions job summary includes corrective actions and category/status counts:
+
+| Result | Interpretation |
+| --- | --- |
+| READY | Both required GitHub and actual-host categories PASS. Advisory warnings may remain; this is never deployment approval. |
+| NOT READY | A required prerequisite failed, remained inconclusive or was skipped. Final aggregation exits nonzero; a failed/skipped host cannot yield READY. |
+| FAIL | Evidence confirms a missing, incorrect, disabled or incompatible prerequisite. Correct it through its separate authorized process. |
+| UNVERIFIED | Evidence is unavailable or inconclusive, including insufficient API permissions; this does not confirm that a setting is missing. |
+| SKIPPED | An inspection did not run, for example because diagnostic host activation is absent or a dependency failed. It supplies no passing evidence. |
+
+Initial NOT READY/UNVERIFIED results are expected: SSRS Web uses a **legacy direct deployment workflow**, has no protected `.clc/release.json`, and does not pin a shared orchestration revision. This integration deliberately leaves `shared_revision` unset. Beta.3 reader compatibility is unestablished, the enrollment environment discrepancy remains, and runner-group admission and installed-manifest verification require independent infrastructure evidence. Do not fabricate shared configuration, weaken checker requirements or change the lock/enrollment to obtain READY; any architecture migration or toolkit upgrade is separate work.
+
+Ordinary read-only `GITHUB_TOKEN` is used with `administrative: false`. Organization runner-group and some protection/settings APIs may be inaccessible and remain UNVERIFIED. Upstream has an optional administrative inspection mode requiring explicit `administrative: true`, the protected hosted `deployment-configuration-inspection` environment and an explicitly supplied short-lived **read-only GitHub App installation token** (`inspection_token`). That is a separate reviewed configuration change, disabled here; no new environments, secrets or App credentials are provisioned, and such a token must never enter the host stage. See the pinned [upstream checker documentation](https://github.com/clcdpc/clc-deployment/blob/4df8d5158cd363c47d4e232af871fb395ea14c2c/docs/deployment-prerequisites.md) for its supported contract and inspection limits.
+
+Static/local and hosted synthetic checks qualify this integration only. Real host/IIS qualification and every outstanding operational/live acceptance gate below remain open; this PR does not establish DEV or production readiness. Do not run privileged commissioning during PR validation.
+
 ## SSRS-specific DEV preflight
 
 Use the locked toolkit's [installation](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/installation.md), [enrollment](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/host-enrollment.md), [deployment/recovery](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/iis-verification.md) guides alongside this checklist.
@@ -185,6 +217,7 @@ dotnet restore src/SsrsPortal/SsrsPortal.csproj --locked-mode -p:ClcIdentityKind
 dotnet build SsrsPortal.slnx -c Release --no-restore
 dotnet test SsrsPortal.slnx -c Release --no-build
 pwsh -NoProfile -File scripts/release/Test-DevDeployment.ps1
+pwsh -NoProfile -File scripts/release/Test-DeploymentReadiness.ps1 -ActionlintPath <approved-actionlint-1.7.12-executable>
 pwsh -NoProfile -File scripts/release/Test-ReleasePackaging.ps1
 ```
 

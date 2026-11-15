@@ -32,6 +32,17 @@ jobs:
       - name: Verify trusted DEV workflow boundaries with synthetic host observations
         shell: pwsh
         run: ./scripts/release/Test-DevDeployment.ps1
+      - name: Verify read-only diagnostic workflow boundaries
+        shell: pwsh
+        run: |
+          # Same reviewed Actionlint 1.7.12 archive/digest as the pinned upstream diagnostic.
+          $tools=Join-Path $env:RUNNER_TEMP 'ssrs-diagnostic-actionlint'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          $archive=Join-Path $tools 'actionlint.zip'
+          Invoke-WebRequest -Uri https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -cne '6E7241B51E6817EA6A047693D8E6FED13B31819C9A0DD6C5A726E1592D22F6E9') { throw 'Diagnostic.ActionlintDigestMismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          ./scripts/release/Test-DeploymentReadiness.ps1 -ActionlintPath (Join-Path $tools 'actionlint.exe')
       - name: Qualify ordinary and CLC Release publish web.config policies
         shell: pwsh
         run: |

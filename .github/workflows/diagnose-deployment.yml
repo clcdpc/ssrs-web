@@ -1,0 +1,121 @@
+name: Validate SSRS Web deployment prerequisites
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  github:
+    if: github.repository == 'clcdpc/ssrs-web'
+    uses: clcdpc/clc-deployment/.github/workflows/validate-deployment.yml@4df8d5158cd363c47d4e232af871fb395ea14c2c
+    with:
+      application_id: ssrs-web
+      target_id: ssrs-web-dev
+      environment_name: ssrs-web-dev
+      integration_branch: master
+      deployment_channel: DEV
+      release_workflow: .github/workflows/release.yml
+      deployment_workflow: .github/workflows/deploy-dev.yml
+      diagnostic_workflow: .github/workflows/diagnose-deployment.yml
+      activation_variable: SSRS_DEV_DEPLOYMENT_ENABLED
+      runner_group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
+      runner_labels: self-hosted,Windows,X64,ssrs-web-dev
+      # Legacy direct deployment has no shared orchestration revision.
+      administrative: false
+
+  host:
+    # Rollout flag/guards are not authorization. Infrastructure must independently
+    # allowlist this exact master workflow in the existing dedicated runner group.
+    if: >-
+      github.repository == 'clcdpc/ssrs-web' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/master' && github.ref_protected &&
+      github.workflow_ref == 'clcdpc/ssrs-web/.github/workflows/diagnose-deployment.yml@refs/heads/master' &&
+      github.workflow_sha == github.sha &&
+      vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY == 'true' &&
+      vars.SSRS_DEV_RUNNER_GROUP != '' && vars.SSRS_DEV_RUNNER_LABELS != ''
+    runs-on:
+      group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
+      labels: ${{ fromJSON(vars.SSRS_DEV_RUNNER_LABELS || '[]') }}
+    environment: ssrs-web-dev
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe -NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"
+    outputs:
+      report_json: ${{ steps.inspect.outputs.report_json }}
+    steps:
+      - name: Verify trusted execution identity before reading shared code
+        env:
+          CLC_DIAGNOSTIC_RUNNER_READY: ${{ vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY }}
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_REF -cne 'refs/heads/master' -or $env:GITHUB_REF_PROTECTED -cne 'true' -or
+              $env:GITHUB_WORKFLOW_REF -cne 'clcdpc/ssrs-web/.github/workflows/diagnose-deployment.yml@refs/heads/master' -or
+              $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or
+              $env:CLC_DIAGNOSTIC_RUNNER_READY -cne 'true') { throw 'Ssrs.TrustedDiagnosticWorkflowRequired' }
+      - name: Read only reviewed shared diagnostic code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: clcdpc/clc-deployment
+          ref: '4df8d5158cd363c47d4e232af871fb395ea14c2c'
+          path: shared-validator
+          persist-credentials: false
+      - name: Inspect the actual enrolled local IIS host
+        id: inspect
+        run: |
+          $ErrorActionPreference='Stop'
+          try {
+              # Expected selector only: authenticate protected policy and every installed byte before import.
+              $manifest='C:\ProgramData\CLC\Deployment\Enrollment\toolkit\versions\0.1.0-beta.3\CLC.Deployment\CLC.Deployment.psd1'
+              $LASTEXITCODE=0
+              $report=& ./shared-validator/tools/deployment-prerequisites/Test-DeploymentHost.ps1 -ApplicationId ssrs-web -TargetId ssrs-web-dev -EnvironmentName ssrs-web-dev -DeploymentChannel DEV -Repository clcdpc/ssrs-web -IntegrationBranch master -ReleaseWorkflow .github/workflows/release.yml -BuildJob release -ToolkitManifestPath $manifest
+              $code=$LASTEXITCODE
+              $json=ConvertTo-Json -InputObject $report -Depth 12 -Compress
+              "report_json=$json" | Out-File -LiteralPath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              exit $code
+          } catch {
+              [Console]::Error.WriteLine('Ssrs.DiagnosticInspectionFailed; private error details suppressed.')
+              exit 1
+          }
+
+  report:
+    if: always()
+    needs: [github, host]
+    runs-on: windows-2022
+    timeout-minutes: 5
+    outputs:
+      github_status: ${{ steps.report.outputs.github_status }}
+      host_status: ${{ steps.report.outputs.host_status }}
+      ready: ${{ steps.report.outputs.ready }}
+      passed_count: ${{ steps.report.outputs.passed_count }}
+      failed_count: ${{ steps.report.outputs.failed_count }}
+      unverified_count: ${{ steps.report.outputs.unverified_count }}
+      skipped_count: ${{ steps.report.outputs.skipped_count }}
+      not_applicable_count: ${{ steps.report.outputs.not_applicable_count }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: clcdpc/clc-deployment
+          ref: '4df8d5158cd363c47d4e232af871fb395ea14c2c'
+          path: shared-validator
+          persist-credentials: false
+      - name: Aggregate every available observation even when a stage fails
+        id: report
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -File "{0}"
+        env:
+          CLC_GITHUB_REPORT: ${{ needs.github.outputs.report_json }}
+          CLC_HOST_REPORT: ${{ needs.host.outputs.report_json }}
+          CLC_GITHUB_JOB: ${{ needs.github.result }}
+          CLC_HOST_JOB: ${{ needs.host.result }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $github=Join-Path $env:RUNNER_TEMP 'github-readiness.json'
+          $hostReport=Join-Path $env:RUNNER_TEMP 'host-readiness.json'
+          [IO.File]::WriteAllText($github,$env:CLC_GITHUB_REPORT)
+          [IO.File]::WriteAllText($hostReport,$env:CLC_HOST_REPORT)
+          & ./shared-validator/tools/deployment-prerequisites/Merge-DeploymentReadiness.ps1 -GitHubReportPath $github -HostReportPath $hostReport -GitHubJobResult $env:CLC_GITHUB_JOB -HostJobResult $env:CLC_HOST_JOB
+          exit $LASTEXITCODE
