@@ -6,7 +6,7 @@ $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $workflowPath=Join-Path $repository '.github/workflows/diagnose-deployment.yml'
 $workflow=[IO.File]::ReadAllText($workflowPath).Replace("`r`n","`n")
-$revision='4df8d5158cd363c47d4e232af871fb395ea14c2c'
+$revision='02e15ae736f6798e6939910aad1ccdca8b34fb67'
 $checkout='actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8'
 $results=[Collections.Generic.List[string]]::new()
 function Assert-True([bool] $Value) {
@@ -59,6 +59,12 @@ Test-Case 'Fixed repository, application, target, channel and environment bind b
         Assert-True ($hostJob.Contains($argument))
     }
     Assert-True ($hostJob.Contains('    environment: ssrs-web-dev'))
+}
+Test-Case 'Hosted inspection passes the runner-group variable unchanged without configuration or activation guards' {
+    Assert-True ($github -cmatch '(?m)^    if: github\.repository == ''clcdpc/ssrs-web''$')
+    Assert-True (@([regex]::Matches($github,'(?m)^    if:')).Count -eq 1)
+    $runnerGroups=@([regex]::Matches($github,'(?m)^      runner_group: (.*)$'))
+    Assert-True ($runnerGroups.Count -eq 1 -and $runnerGroups[0].Groups[1].Value -ceq '${{ vars.SSRS_DEV_RUNNER_GROUP }}')
 }
 Test-Case 'Routing requires protected source and separate diagnostic activation before host admission' {
     $condition=[regex]::Match($hostJob,'(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
