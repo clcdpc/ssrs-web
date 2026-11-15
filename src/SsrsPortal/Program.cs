@@ -36,11 +36,11 @@ try
 {
 var builder = WebApplication.CreateBuilder(args);
 startupBuilder = builder;
-fileLogging = new ApplicationLogging(ApplicationLogging.ResolveDirectory(builder));
+fileLogging = ApplicationLogging.Create(builder);
 ExternalConfigurationLoader.AddTo(builder);
-fileLogging.Configure(builder.Configuration);
 fileLogging.Register(builder);
 var settings = ApplicationConfiguration.Read(builder.Configuration, builder.Environment.IsDevelopment());
+fileLogging.VerifyFileLogging();
 var portal = settings.Portal;
 var monitor = settings.Monitor;
 var entra = settings.Entra;
@@ -230,7 +230,7 @@ builder.Services.AddHostedService<SessionReaper>();
 builder.Services.AddSingleton<ICatalogSnapshotProvider, SqlCatalogSnapshotProvider>();
 builder.Services.AddHostedService<CatalogMonitor>();
 builder.AddSubscriptions(portal);
-var app = builder.Build();
+await using var app = builder.Build();
 startupBuilder = null; // The built host now owns and disposes configuration/providers.
 fileLogging.ObserveLifetime(app);
 if (!app.Environment.IsDevelopment())
@@ -347,7 +347,7 @@ catch (Exception exception) when (exception is not HostAbortedException)
 {
     if (fileLogging is not null) { fileLogging.Fatal(exception); }
     else { ApplicationLogging.Fallback(exception); }
-    // The original chain is preserved in the file. Do not let the runtime print an
+    // The original chain is preserved through the safe layout. Do not let the runtime print an
     // unfiltered dependency exception (for example a password) to hosting stderr.
     throw new InvalidOperationException(fileLogging?.SafeStartupMessage(exception) ?? FailureDiagnostics.Filter(exception.Message));
 }

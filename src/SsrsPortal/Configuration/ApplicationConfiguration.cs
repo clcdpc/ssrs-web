@@ -19,7 +19,7 @@ internal sealed record ApplicationConfiguration(PortalOptions Portal, CatalogMon
         entra.Validate(portal.TestAuth);
         var subscriptions = ExternalConfigurationLoader.Bind<SubscriptionOptions>(configuration, "Subscriptions", false);
         subscriptions.Validate();
-        _ = FileLoggingOptions.Read(configuration);
+        FileLoggingOptions.Validate(configuration);
         var deployment = ExternalConfigurationLoader.Bind<DeploymentOptions>(configuration, "Deployment", !development);
         var keys = ExternalConfigurationLoader.Bind<PersistentKeyOptions>(configuration, "DataProtection", !development);
         if (!development || configuration.GetSection("Deployment").Exists()) { deployment.Validate(); }

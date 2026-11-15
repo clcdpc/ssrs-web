@@ -55,7 +55,6 @@
   "Logging": {
     "File": {
       "Enabled": true,
-      "Rotation": "Daily",
       "MaxFileSizeBytes": 52428800,
       "RetentionDays": 30
     },

@@ -6,6 +6,8 @@ Staff in approved Microsoft Entra tenants need the `ReportViewer` role. Everyone
 
 Optional [subscriptions](docs/operations/subscriptions.md) use SQL Server, Hangfire, and Postmark without archiving output. The optional read-only [SQL monitor](docs/operations/catalog-monitor.md) refreshes catalog metadata; it never grants access.
 
+[Logging](docs/operations/troubleshooting.md#persistent-file-logging) uses Clc.Logging for NLog infrastructure and application-owned SafeLogLayout sanitization. Bootstrap is stderr-only; configured startup verifies an actual persistent write before serving requests. Existing `ssrs-web-yyyy-MM-dd.log` filenames, 50 MiB rollover and 30-day retention remain. Remove legacy `Logging:File:Rotation` from deployed configuration before upgrading; daily rotation is automatic, and optional `MaxArchiveFiles` defaults to the historical unlimited count when omitted.
+
 ## Verification
 
 Install the SDK in [global.json](global.json), PowerShell 7+, and Node.js 24 (the CI version). Run from the repository root:
@@ -72,7 +74,7 @@ Subscriptions are disabled by default. Follow [local subscription setup](docs/op
 
 - [Operations](docs/operations/README.md) and [troubleshooting](docs/operations/troubleshooting.md): configuration, IIS, Entra, logs, and diagnostics.
 - [Report workspace](docs/behavior/report-workspace.md), [expand/collapse](docs/behavior/report-expand-collapse.md), and [branding](docs/behavior/ssrs-branding.md): current behavior and limits.
-- [Deployment](docs/clc-deployment.md): releases, recovery, qualification status, and outstanding host checks.
+- [Deployment](docs/clc-deployment.md): releases, recovery, qualification status, and outstanding host checks; [manual prerequisite diagnostics](docs/clc-deployment.md#read-only-deployment-prerequisite-validation).
 - [SOAP and renderer fixtures](tests/SsrsPortal.Tests/Fixtures/README.md): protocol expectations and synthetic coverage.
 
 ## Live acceptance

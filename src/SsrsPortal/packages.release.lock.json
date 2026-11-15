@@ -10,15 +10,26 @@
       },
       "Clc.Configuration": {
         "type": "Direct",
-        "requested": "[0.1.0-beta.4, 0.1.0-beta.4]",
-        "resolved": "0.1.0-beta.4",
-        "contentHash": "jUEzj1jKkScxLUdSGrVfq7cI9C1kxjXjgSVkkCItpO5NSNH0XWy9AC398xJix/tB6URFZgAnv9rkhE7Vsy9NbA=="
+        "requested": "[0.1.0-beta.5, 0.1.0-beta.5]",
+        "resolved": "0.1.0-beta.5",
+        "contentHash": "42fUrWLftqLz6J/fPX+6ds2nLVsSZhHMj/kb81X9mt5Z0dn3v0dvS2NXEdp+58enuxDrA4Vo5Lhlq1nuFvicSg=="
       },
       "Clc.Deployment.AspNetCore": {
         "type": "Direct",
         "requested": "[0.1.0-beta.3, 0.1.0-beta.3]",
         "resolved": "0.1.0-beta.3",
         "contentHash": "paYYEdeSapvFGBlSMibk+7DhnIUvY1/bIlXREdOVhNhwZ0bbQZOC2d2plwYWKed9zgB3/0OfQo3CERNK8xEFJA=="
+      },
+      "Clc.Logging": {
+        "type": "Direct",
+        "requested": "[0.1.0-beta.2, 0.1.0-beta.2]",
+        "resolved": "0.1.0-beta.2",
+        "contentHash": "MDOCqnkZseRYvEl7Hyl1CUBApHgnDaR2yxOUtaQWluEhd6gPjqXlzeVyj2YnVHb+JIW0K4qtn1IWPBB0hdyVrw==",
+        "dependencies": {
+          "Clc.Configuration": "0.1.0-beta.5",
+          "NLog": "6.2.2",
+          "NLog.Extensions.Logging": "6.3.0"
+        }
       },
       "Cronos": {
         "type": "Direct",
@@ -99,15 +110,6 @@
         "requested": "[6.2.2, )",
         "resolved": "6.2.2",
         "contentHash": "Hoxigm/d7wY/+y4y2ILF2ERSojhxgLd8ASBZQbrnm52jB5NHkF4AWW5tZzMxJ/HTOp0bLwClGOokrA31iSXuMA=="
-      },
-      "NLog.Extensions.Logging": {
-        "type": "Direct",
-        "requested": "[6.2.2, )",
-        "resolved": "6.2.2",
-        "contentHash": "Z5ctMnl27a2rEJIP6uiOnfVa7PqQ8KFlAG2JRS2B3paDeKFVPiaMPASADBW5JcSjoNlJNWi8iTSF0iXYbT2t/Q==",
-        "dependencies": {
-          "NLog": "6.2.2"
-        }
       },
       "System.Security.Cryptography.Pkcs": {
         "type": "Direct",
@@ -204,6 +206,14 @@
         "type": "Transitive",
         "resolved": "1.0.0",
         "contentHash": "N4KeF3cpcm1PUHym1RmakkzfkEv3GRMyofVv40uXsQhCQeglr2OHNcUk2WOG51AKpGO8ynGpo9M/kFXSzghwug=="
+      },
+      "NLog.Extensions.Logging": {
+        "type": "Transitive",
+        "resolved": "6.3.0",
+        "contentHash": "ZTgiFC5LrNp32CrgqfOf2CIQmfIVEh2/E2IknNu1c/AofW/Gi7J+rEpIa7yAJoH+BTb1RX13D3XZ4HB0LKzT5A==",
+        "dependencies": {
+          "NLog": "6.2.2"
+        }
       },
       "System.Configuration.ConfigurationManager": {
         "type": "Transitive",

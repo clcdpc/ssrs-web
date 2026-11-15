@@ -132,13 +132,9 @@ public sealed class ProgramDeploymentIntegrationTests
             StringAssert.Contains(placeholders.StandardError, "placeholder REPLACE_ME");
             Assert.IsFalse((placeholders.StandardOutput + placeholders.StandardError).Contains("SECRET_BOOTSTRAP_SENTINEL", StringComparison.Ordinal));
             CollectionAssert.AreEqual(starterBytes, File.ReadAllBytes(configPath), "Rejected placeholders must not rewrite the starter file.");
-            foreach (var file in Directory.GetFiles(logDirectory))
-            {
-                Assert.IsTrue(Regex.IsMatch(Path.GetFileName(file), @"^ssrs-web-\d{4}-\d{2}-\d{2}\.log$"));
-                Assert.IsFalse(File.ReadAllText(file).Contains("SECRET_BOOTSTRAP_SENTINEL", StringComparison.Ordinal));
-                File.Delete(file);
-            }
-            Directory.Delete(logDirectory);
+            StringAssert.Contains(placeholders.StandardError, "Application bootstrap started");
+            StringAssert.Contains(placeholders.StandardError, "Application startup or hosting failed");
+            Assert.IsFalse(Directory.Exists(logDirectory), "Failures before configured logging must remain stderr-only without replay files.");
 
             Directory.CreateDirectory(keyDirectory);
             var configuration = AcceptanceConfiguration(keyDirectory);
@@ -264,6 +260,14 @@ public sealed class ProgramDeploymentIntegrationTests
             var readiness = await WaitForReadiness(client, process, address, TimeSpan.FromSeconds(30));
             AssertReadiness(readiness, success, "integration-001");
             Assert.IsTrue(Directory.Exists(logDirectory), "The actual host should initialize its conventional Logs directory.");
+            var startupLogs = string.Join('\n', Directory.GetFiles(logDirectory, "ssrs-web-*.log").Select(path =>
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }));
+            StringAssert.Contains(startupLogs, "Persistent file logging configured/verified");
+            Assert.IsFalse(startupLogs.Contains("Application bootstrap started", StringComparison.Ordinal), "Bootstrap stderr must not be replayed into configured files.");
             Assert.IsTrue(Directory.GetFiles(keyDirectory, "key-*.xml").Length > 0, "The runtime identity should persist a key at startup.");
 
             string protectedCookie;
@@ -428,7 +432,7 @@ public sealed class ProgramDeploymentIntegrationTests
         },
         ["Logging"] = new JsonObject
         {
-            ["File"] = new JsonObject { ["Enabled"] = true, ["Rotation"] = "Daily", ["MaxFileSizeBytes"] = 52428800, ["RetentionDays"] = 30 },
+            ["File"] = new JsonObject { ["Enabled"] = true, ["MaxFileSizeBytes"] = 52428800, ["RetentionDays"] = 30 },
             ["LogLevel"] = new JsonObject { ["Default"] = "Information", ["Microsoft"] = "Warning", ["Microsoft.AspNetCore"] = "Warning" }
         }
     };
