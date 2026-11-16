@@ -17,7 +17,7 @@ function Test-Case([string] $Name,[scriptblock] $Body) {
 function Copy-Record($Value) { return ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Value -Depth 30) -AsHashtable -Depth 30 -NoEnumerate }
 function Reset-Service {
     $script:releases=@(); $script:assets=@(); $script:bytes=@{}; $script:writes=@(); $script:race=$false
-    $script:currentSource='1'*40; $script:tagObject='1'*40; $script:prOpen=$false; $script:consumerSuccessful=$true
+    $script:tagObject='1'*40
 }
 function Invoke-TagGitHub([string] $Path,[string] $OutputPath) {
     switch -Regex ($Path) {
@@ -27,13 +27,6 @@ function Invoke-TagGitHub([string] $Path,[string] $OutputPath) {
         '/git/ref/tags/(.+)$' { return @{ref=('refs/tags/'+$Matches[1]);object=@{type='commit';sha=$script:tagObject}} }
         '/branches/master$' { return @{name='master';protected=$true;commit=@{sha=('7'*40)}} }
         '/compare/' { return @{base_commit=@{sha=($Path -split '/compare/')[1].Split('.')[0]};status=$(if ($Path.Contains('1'*40)) {'diverged'} else {'ahead'})} }
-        '/pulls\?' { return ,@() }
-        '/ssrs-web/$' { return @{id=123L;full_name='clcdpc/ssrs-web';default_branch='master'} }
-        '/workflows/deploy-release.yml$' { return @{id=10L;path='.github/workflows/deploy-release.yml'} }
-        '/actions/runs/99/attempts/1$' { return @{id=99L;run_attempt=1L;head_sha=('7'*40);head_branch='master';repository=@{id=123L};head_repository=@{id=123L};
-            event='workflow_run';status='completed';path='.github/workflows/deploy-release.yml';workflow_id=10L} }
-        '/actions/runs/99/attempts/1/jobs\?' { return @{total_count=1;jobs=@(@{name='archive';run_id=99L;run_attempt=1L;head_sha=('7'*40);status='completed';
-            conclusion=$(if ($script:consumerSuccessful) {'success'} else {'failure'});labels=@('windows-2022')})} }
         default { throw ('Unexpected fixture read: '+$Path) }
     }
 }
@@ -61,8 +54,8 @@ function New-TestRelease([string] $Tag='v1.0.0-dev.1',[long] $Run=42,[long] $Att
         }
     } finally { $zip.Dispose() }
     $t=Get-SsrsReleaseTag $Tag
-    return @{tag=$Tag;channel=$t.channel;sourceCommit=('1'*40);tagObjectSha=('1'*40);sourceEligibility='pull-request-7';archivePath=$path;
-        run=@{id=$Run;run_attempt=$Attempt;event='workflow_dispatch'};
+    return @{tag=$Tag;channel=$t.channel;targetId=$t.targetId;sourceCommit=('1'*40);tagObjectSha=('1'*40);sourceEligibility='tag';archivePath=$path;
+        run=@{id=$Run;run_attempt=$Attempt;event='push'};
         provenance=@{releaseId="ssrs-web-$Run-$Attempt";artifactId=($Run*100+$Attempt);innerReleaseSha256=(Get-FileHash $path).Hash.ToLowerInvariant();artifactTransportSha256=('4'*64)}}
 }
 $previous=@{}
@@ -122,18 +115,13 @@ try {
         $script:bytes[$asset.id]=[Text.Encoding]::UTF8.GetBytes('{}')
         Assert-Fails { Get-SsrsCanonicalArchive $tag $ref } 'ArchiveMetadataMismatch'; $script:bytes[$asset.id]=$old
     }
-    Test-Case 'Closed historical DEV dispatch qualifies using immutable archive and successful master consumer without old Actions artifacts' {
-        $tag=Get-SsrsReleaseTag 'v1.0.0-dev.1'
-        Assert-True ((Get-SsrsSourceEligibility $tag ('1'*40) 'workflow_dispatch') -ceq 'historical-release-5')
-        Assert-Fails { Get-SsrsSourceEligibility $tag ('1'*40) 'push' } 'EligiblePullRequestRequired'
-        $script:releases[0].immutable=$false
-        Assert-Fails { Get-SsrsSourceEligibility $tag ('1'*40) 'workflow_dispatch' } 'HistoricalImmutableReleaseRequired'; $script:releases[0].immutable=$true
-        $script:consumerSuccessful=$false
-        Assert-Fails { Get-SsrsSourceEligibility $tag ('1'*40) 'workflow_dispatch' } 'HistoricalConsumerUntrusted'; $script:consumerSuccessful=$true
-        $script:releases=@()
-        Assert-Fails { Get-SsrsSourceEligibility $tag ('1'*40) 'workflow_dispatch' } 'HistoricalImmutableReleaseRequired'
+    Test-Case 'Same tag remains eligible without an old PR or historical consumer; same build identity cannot change bytes' {
+        Assert-True ((Get-SsrsSourceEligibility (Get-SsrsReleaseTag 'v1.0.0-dev.1') ('1'*40)) -ceq 'tag')
+        $changed=New-TestRelease; $changed.provenance.artifactId++
+        Assert-Fails { Publish-SsrsCanonicalRelease $changed (Join-Path $work 'same-build-different-bytes') } 'ArchiveBuildIdentityMismatch'
+        Assert-True ($script:writes.Count -eq 0)
     }
-    Test-Case 'Real dispatch selection guard accepts a tag and rejects an ordinary branch before checkout' {
+    Test-Case 'Real tag selection guard accepts a tag and rejects an ordinary branch before checkout' {
         $workflow=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../.github/workflows/release.yml'))
         $guard=[regex]::Match($workflow,'(?m)^          if \(\$env:SELECTED_COMMIT .*Release.ExactWorkflowSourceRequired.*$').Value.Trim()
         Assert-True (-not [string]::IsNullOrEmpty($guard))
@@ -148,8 +136,12 @@ try {
         } finally { foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$saved[$name]) } }
     }
     Test-Case 'Publication and privileged deployment entry points reject ordinary local and branch-dispatch contexts' {
-        Assert-Fails { & "$PSScriptRoot/Publish-TagRelease.ps1" } 'TrustedConsumerRequired'
-        Assert-Fails { & "$PSScriptRoot/Build-PortalRelease.ps1" -SourceCommit ('1'*40) } 'TrustedProducerContextRequired'
+        $eventName=$env:GITHUB_EVENT_NAME
+        try {
+            $env:GITHUB_EVENT_NAME='pull_request'
+            Assert-Fails { & "$PSScriptRoot/Publish-TagRelease.ps1" } 'ExactTagWorkflowRequired'
+            Assert-Fails { & "$PSScriptRoot/Build-PortalRelease.ps1" -SourceCommit ('1'*40) } 'TrustedProducerContextRequired'
+        } finally { $env:GITHUB_EVENT_NAME=$eventName }
     }
     Test-Case 'Actual publisher entry point loads its own helpers and publishes offline in a clean process' {
         $fixture=Join-Path $work 'publisher'; [void][IO.Directory]::CreateDirectory($fixture)
@@ -178,16 +170,17 @@ public static class PublisherFixture { }
         $r.provenance.innerReleaseSha256=(Get-FileHash $r.archivePath).Hash.ToLowerInvariant()
         $r.provenance.manifestSha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($manifest)).ToLowerInvariant()
         [IO.File]::WriteAllText((Join-Path $fixture 'release.json'),($r | ConvertTo-Json -Depth 8))
-        [IO.File]::WriteAllText((Join-Path $fixture 'event.json'),'{"workflow_run":{"id":42,"run_attempt":1}}')
+
         foreach ($name in @('Copy-Record','Reset-Service','Invoke-TagGitHub','Invoke-SsrsReleaseWrite')) {
             [IO.File]::AppendAllText((Join-Path $fixture 'TagRelease.Common.ps1'),("`nfunction $name {`n"+(Get-Command $name).Definition+"`n}`n"))
         }
         [IO.File]::AppendAllText((Join-Path $fixture 'TagRelease.Common.ps1'),@'
-function Get-SsrsAuthenticatedTagRelease($EventRun,[string] $TrustedCommit,[string] $Directory) {
-    if ($EventRun.id -ne 42 -or $EventRun.run_attempt -ne 1 -or $TrustedCommit -cne ('7'*40)) { throw 'Unexpected publisher acquisition' }
+function Get-SsrsAuthenticatedTagRelease($Context,[string] $WorkflowCommit,[string] $Directory) {
+    if ($Context.id -ne 42 -or $Context.run_attempt -ne 1 -or $WorkflowCommit -cne ('1'*40)) { throw 'Unexpected publisher acquisition' }
     [void][IO.Directory]::CreateDirectory($Directory)
     return Read-TagJson ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'release.json')))
 }
+function Test-SsrsTagSuperseded($Release) { return $false }
 Reset-Service
 '@)
         # Mirror the real downloader's child script scope: it loads helpers for
@@ -209,9 +202,9 @@ function Test-ClcRelease($ArchivePath) {
         $start.FileName=Join-Path $PSHOME $(if ($IsWindows) {'pwsh.exe'} else {'pwsh'})
         $start.UseShellExecute=$false; $start.CreateNoWindow=$true; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
         foreach ($argument in @('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $fixture 'Publish-TagRelease.ps1'))) { $start.ArgumentList.Add($argument) }
-        $context=@{GITHUB_REPOSITORY='clcdpc/ssrs-web';GITHUB_EVENT_NAME='workflow_run';GITHUB_REF='refs/heads/master';GITHUB_REF_PROTECTED='true';
-            GITHUB_WORKFLOW_SHA=('7'*40);GITHUB_SHA=('7'*40);GITHUB_WORKFLOW_REF='clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master';
-            GITHUB_EVENT_PATH=(Join-Path $fixture 'event.json');GITHUB_RUN_ID='99';GITHUB_RUN_ATTEMPT='1';RUNNER_TEMP=$fixture;SSRS_ARTIFACT_READ_TOKEN='offline-fixture'}
+        $context=@{GITHUB_JOB='archive';GITHUB_REPOSITORY='clcdpc/ssrs-web';GITHUB_ACTIONS='true';GITHUB_EVENT_NAME='push';GITHUB_REF='refs/tags/v1.0.0-dev.1';GITHUB_REF_NAME='v1.0.0-dev.1';GITHUB_REF_TYPE='tag';
+            GITHUB_WORKFLOW_SHA=('1'*40);GITHUB_SHA=('1'*40);GITHUB_WORKFLOW_REF='clcdpc/ssrs-web/.github/workflows/release.yml@refs/tags/v1.0.0-dev.1';
+            GITHUB_RUN_ID='42';GITHUB_RUN_ATTEMPT='1';GITHUB_OUTPUT=(Join-Path $fixture 'outputs.txt');RUNNER_TEMP=$fixture;SSRS_ARTIFACT_READ_TOKEN='offline-fixture'}
         foreach ($name in $context.Keys) { $start.Environment[$name]=$context[$name] }
         $process=[Diagnostics.Process]::new(); $process.StartInfo=$start
         try {
@@ -225,6 +218,7 @@ function Test-ClcRelease($ArchivePath) {
             $publication=@(Get-ChildItem -LiteralPath $fixture -Directory -Filter 'ssrs-release-archive-*')[0].FullName
             $files=@(Get-ChildItem -LiteralPath (Join-Path $publication 'publication') -File)
             Assert-True ($files.Count -eq 6)
+            Assert-True ([IO.File]::ReadAllText($context.GITHUB_OUTPUT).Contains('target=ssrs-web-dev'))
         } finally { $process.Dispose() }
     }
     Test-Case 'Provenance records tag identity for both producer events and keeps branch CI fixtures independent of release context' {
@@ -247,7 +241,7 @@ function Test-ClcRelease($ArchivePath) {
     }
 } finally {
     foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name,$previous[$name]) }
-    $report=@{classification='synthetic-release-archive-and-historical-eligibility';liveReleasePublished=$false;passed=$results.Count;cases=$results}
+    $report=@{classification='synthetic-release-archive-and-publisher';liveReleasePublished=$false;passed=$results.Count;cases=$results}
     [IO.File]::WriteAllText((Join-Path $work 'results.json'),($report | ConvertTo-Json -Depth 8))
     Write-Output "Release archive: $($results.Count) passed; results $work/results.json"
 }

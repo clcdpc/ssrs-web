@@ -308,10 +308,18 @@ try {
     Test-Case 'Provenance requires producer and distinct GitHub transport/inner artifact identity' {
         $evidence=@{schemaVersion=1;recordKind='ssrs-web-build-evidence';repository='clcdpc/ssrs-web';sourceCommit=('1'*40);workflowCommit=('1'*40);workflowPath='.github/workflows/release.yml';
             runId=1;runAttempt=1;buildJob='release';innerReleaseSha256=('2'*64);manifestSha256=('3'*64);moduleInventorySha256=('4'*64);deploymentApproval=$false;hostInstallationApproval=$false;integrityVerified=$true;
-            releaseId='ssrs-web-test-1';sdkVersion='10.0.303';dependencyLockSha256=('5'*64);toolkitBuilder=@{module='CLC.Deployment';version='0.1.0-dev';sourceCommit=('6'*40);distributionSha256=('7'*64)}}
+            releaseId='ssrs-web-1-1';sdkVersion='10.0.303';dependencyLockSha256=('5'*64);toolkitBuilder=@{module='CLC.Deployment';version='0.1.0-dev';sourceCommit=('6'*40);distributionSha256=('7'*64)}}
         $path=Join-Path $work 'synthetic-build-evidence.json'; [IO.File]::WriteAllText($path,($evidence | ConvertTo-Json -Depth 10 -Compress))
         $provenance=& "$PSScriptRoot/Write-ReleaseProvenance.ps1" -BuildEvidencePath $path -ArtifactId 42 -ArtifactTransportSha256 ('sha256:'+('8'*64)) -OutputPath (Join-Path $work 'provenance.json')
         Assert-True ($provenance.artifactId -eq 42 -and $provenance.artifactTransportSha256 -ceq ('8'*64) -and $provenance.innerReleaseSha256 -ceq ('2'*64) -and -not $provenance.deploymentApproval)
+        # A same-tag rebuild retains source but must carry this attempt's
+        # package/artifact identity rather than reusing the canonical build.
+        $evidence.runAttempt=2; $evidence.releaseId='ssrs-web-1-2'; $evidence.innerReleaseSha256='a'*64; $evidence.manifestSha256='b'*64
+        [IO.File]::WriteAllText($path,($evidence | ConvertTo-Json -Depth 10 -Compress))
+        $rebuilt=& "$PSScriptRoot/Write-ReleaseProvenance.ps1" -BuildEvidencePath $path -ArtifactId 43 -ArtifactTransportSha256 ('c'*64) -OutputPath (Join-Path $work 'rebuilt-provenance.json')
+        Assert-True ($rebuilt.sourceCommit -ceq $provenance.sourceCommit -and $rebuilt.runId -eq $provenance.runId -and $rebuilt.runAttempt -eq 2 -and
+            $rebuilt.releaseId -cne $provenance.releaseId -and $rebuilt.artifactId -ne $provenance.artifactId -and
+            $rebuilt.innerReleaseSha256 -cne $provenance.innerReleaseSha256 -and $rebuilt.artifactTransportSha256 -cne $provenance.artifactTransportSha256)
         $evidence.Remove('workflowCommit'); [IO.File]::WriteAllText($path,($evidence | ConvertTo-Json -Depth 10 -Compress))
         Assert-Fails { & "$PSScriptRoot/Write-ReleaseProvenance.ps1" -BuildEvidencePath $path -ArtifactId 42 -ArtifactTransportSha256 ('8'*64) -OutputPath (Join-Path $work 'incomplete.json') }
     }

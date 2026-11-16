@@ -9,7 +9,7 @@ These instructions describe host setup and live acceptance; they do not prove de
 - The [CLC deployment runbook](../clc-deployment.md) covers release identity, validation, configuration revisions, persistent keys and recovery.
 - Follow the runbook's pinned [Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/c09a841871a1552ec131c12cdd8b4c50f930f5f9/docs/setup-guide.md) for commissioning, then use [optional read-only prerequisite verification](../clc-deployment.md#read-only-deployment-prerequisite-validation). Its separately admitted host diagnostic does not provision infrastructure or authorize deployment.
 - The runbook's [SSRS-specific DEV preflight](../clc-deployment.md#ssrs-specific-dev-preflight) and [seven-check pilot](../clc-deployment.md#planned-real-dev-seven-check-pilot) record application gates that generic toolkit enrollment does not establish.
-- [Tag-driven release operations](../clc-deployment.md#tag-driven-automatic-deployment) covers automatic tag pushes, fresh existing-tag builds, immutable GitHub Release archives, Actions artifact transport, protected-master admission and separate standing authorization/activation. Automatic DEVWEB and production remain disabled pending compatible toolkit publication/installation and host qualification. Routine manual deployment dispatch is removed; initial enrollment/cutover/baseline and exceptional recovery remain separate administration. Synthetic tests do not establish real-IIS acceptance.
+- [Tag-driven release operations](../clc-deployment.md#tag-driven-automatic-deployment) covers automatic tag build/test, immutable publication and deployment, including unmerged DEV workflow/script changes. The tag channel derives target/environment/runner/authorization IDs without routing variables. Host enrollment, a baseline and protected standing authorization are provisioned independently; initial cutover and recovery remain separate administration. Synthetic tests do not establish real-IIS acceptance.
 
 ## Host setup
 
@@ -166,7 +166,7 @@ Test tenant removal plus recycle. Test role deassignment after sign-out/new sign
 
 Release and trusted DEV workflows use [`deployment/toolkit.lock.json`](../../deployment/toolkit.lock.json) as the authority for the toolkit source, version, distribution archive SHA-256, module inventory SHA-256 and asset URI. These pins are populated; they grant no installation or deployment authority.
 
-Operational deployment remains disabled until the host and real DEV prerequisites receive independent approval. Repository tests do not verify runner-group policy, protected host configuration, actual IIS state or DEV access. Follow the [deployment runbook](../clc-deployment.md) for release identity, validation, keys, runner admission, deployment and recovery.
+Withhold host standing authorization until host and real DEV prerequisites receive independent approval. Repository tests do not verify runner admission, protected host configuration, actual IIS state or DEV access. Follow the [deployment runbook](../clc-deployment.md) for release identity, validation, keys, runner admission, deployment and recovery.
 
 ## Catalog cache operations
 

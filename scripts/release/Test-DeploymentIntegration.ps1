@@ -372,7 +372,7 @@ try {
             $v=Test-ClcRelease -ArchivePath $path
             $m=[Text.Encoding]::UTF8.GetString((Get-TestZipEntries $path | Where-Object name -CEQ 'manifest.json').bytes) | ConvertFrom-Json -AsHashtable
             return @{tag=$Tag;channel='dev';targetId='ssrs-web-dev';sourceCommit=$m.source.commit;tagObjectSha=$m.source.commit;archivePath=$path;
-                run=@{id=[long]$m.build.runId;run_attempt=[long]$m.build.runAttempt;event='workflow_dispatch'};
+                run=@{id=[long]$m.build.runId;run_attempt=[long]$m.build.runAttempt;event='push'};
                 provenance=@{releaseId=$m.releaseId;sourceCommit=$m.source.commit;artifactId=([long]$m.build.runId*100+$m.build.runAttempt);innerReleaseSha256=$v.archiveSha256;
                     manifestSha256=$v.manifestSha256;artifactTransportSha256=('4'*64)}}
         }
@@ -385,11 +385,11 @@ try {
         Assert-Bridge ($auto.sourceCommit -ceq $rebuilt.sourceCommit -and $auto.provenance.releaseId -cne $rebuilt.provenance.releaseId -and
             $auto.provenance.innerReleaseSha256 -cne $rebuilt.provenance.innerReleaseSha256 -and $rebuilt.run.id -gt $auto.run.id) 'same source with distinct newer build/package identities'
         $standing=Get-Content -LiteralPath (Join-Path $toolkit 'tests/Fixtures/standing-authorization.json') -Raw | ConvertFrom-Json -AsHashtable
-        $standing.standingAuthorizationId='synthetic-standing'; $standing.targetId='ssrs-web-dev'; $standing.applicationId='ssrs-web'; $standing.environmentName='DEV'
+        $standing.standingAuthorizationId='ssrs-web-dev'; $standing.targetId='ssrs-web-dev'; $standing.applicationId='ssrs-web'; $standing.environmentName='DEV'
         $standing.sourceRepository='clcdpc/ssrs-web'; $standing.buildWorkflowPath='.github/workflows/release.yml'; $standing.buildJob='release'; $standing.lineageId=$approval.lineageId
         $standingRoot=Join-Path $fixture.layout.approvalCatalogRoot 'standing'; [void][IO.Directory]::CreateDirectory($standingRoot)
-        $standingPath=Join-Path $standingRoot 'synthetic-standing.json'
-        $adapterContext=@{module=$module;target=$fixture.target;standingAuthorizationId='synthetic-standing'}
+        $standingPath=Join-Path $standingRoot 'ssrs-web-dev.json'
+        $adapterContext=@{module=$module;target=$fixture.target}
         Test-BridgeCase 'Actual adapter and toolkit reject missing or revoked standing authorization before IIS effects' {
             $before=Get-BridgeLiveSnapshot $fixture; $global:SsrsBridge.operations.Clear()
             Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext } 'Clc.StandingAuthorizationRejected'

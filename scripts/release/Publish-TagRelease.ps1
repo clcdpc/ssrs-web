@@ -3,14 +3,11 @@
 param()
 . "$PSScriptRoot/Release.Common.ps1"
 . "$PSScriptRoot/TagRelease.Common.ps1"
-if ($env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_run' -or $env:GITHUB_REF -cne 'refs/heads/master' -or
-    $env:GITHUB_REF_PROTECTED -cne 'true' -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
-    $env:GITHUB_WORKFLOW_REF -cne 'clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master') { Stop-TagRelease 'TrustedConsumerRequired' }
-$event=Read-TagJson ([IO.File]::ReadAllBytes($env:GITHUB_EVENT_PATH))
+$context=Get-SsrsTagWorkflowContext
+if ($env:GITHUB_JOB -cne 'archive') { Stop-TagRelease 'ArchiveJobRequired' }
 $directory=Join-Path $env:RUNNER_TEMP ('ssrs-release-archive-'+[Guid]::NewGuid().ToString('N'))
-$release=Get-SsrsAuthenticatedTagRelease $event.workflow_run $env:GITHUB_WORKFLOW_SHA $directory
-# Authenticate a master-pinned packaging inspector, then inspect data only.
-# No application code or tagged producer script runs with contents:write.
+$release=Get-SsrsAuthenticatedTagRelease $context $env:GITHUB_WORKFLOW_SHA $directory
+# Authenticate the tagged packaging inspector, then inspect package data only.
 $builder=& "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath "$PSScriptRoot/../../deployment/toolkit.lock.json" -Destination (Join-Path $directory 'toolkit')
 $module=Import-Module $builder.moduleManifest -Force -PassThru
 $verified=& $module { param($Path) Test-ClcRelease -ArchivePath $Path } $release.archivePath
@@ -25,4 +22,9 @@ try {
         $manifest.build.runId -ne $release.run.id -or $manifest.build.runAttempt -ne $release.run.run_attempt) { Stop-TagRelease 'ArchivePackageMismatch' }
     Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.dll')))) $p.releaseId $release.sourceCommit
 } finally { $zip.Dispose() }
-Publish-SsrsCanonicalRelease $release (Join-Path $directory 'publication') | ConvertTo-Json -Compress | Write-Output
+$publication=Publish-SsrsCanonicalRelease $release (Join-Path $directory 'publication')
+$publication | ConvertTo-Json -Compress | Write-Output
+if ($env:GITHUB_OUTPUT) {
+    $target=if ($release.targetId -and -not (Test-SsrsTagSuperseded $release)) { $release.targetId } else { '' }
+    "target=$target" | Out-File -LiteralPath $env:GITHUB_OUTPUT -Append -Encoding utf8
+}

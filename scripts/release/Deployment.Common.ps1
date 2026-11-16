@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 # Shared automatic deployment and separate administrative safeguards.
-# Load only from the trusted workflow commit.
+# Load only from the exact tagged workflow commit.
 $script:SsrsTargetId='ssrs-web-dev'
 $script:SsrsEnvironmentName='DEV'
 # SSRS-DEV-FUNCTIONS-BEGIN
@@ -471,7 +471,8 @@ function Invoke-SsrsDevCore($Bootstrap,[string] $AuthorizationId,[string] $Appro
 }
 function New-SsrsEvidence {
     return [ordered]@{recordKind='ssrs-web-deployment-evidence';schemaVersion=1;targetId=$script:SsrsTargetId;environmentName=$script:SsrsEnvironmentName;runtimeEnvironment='Production';
-        releaseId=$null;sourceCommit=$null;enrollmentState='Unknown';initializationPerformed=$null;requiresOperatorIntervention=$null;deploymentPhase=$null;mutationScope='None';
+        releaseId=$null;sourceCommit=$null;releaseTag=$null;tagObjectSha=$null;runId=$null;runAttempt=$null;packageSha256=$null;
+        enrollmentState='Unknown';initializationPerformed=$null;requiresOperatorIntervention=$null;deploymentPhase=$null;mutationScope='None';
         artifactVerification='NotVerified';toolkitVersion=$null;toolkitSourceCommit=$null;outcome='Failed';attemptId=$null;currentGeneration=$null;observedPoolState='Unknown';workerCount=$null;
         readiness='NotVerified';code=$null;nextAction='ReviewIndependentPrerequisitesAndRetainEvidence'}
 }

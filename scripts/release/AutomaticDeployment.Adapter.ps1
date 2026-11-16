@@ -10,7 +10,6 @@ function Invoke-SsrsToolkitAutomaticDeployment($Release,$Context) {
         return $sets.Count -eq 1 -and @($sets[0].Parameters | Where-Object { $_.IsMandatory -and $_.Name -cin @('TargetId','StandingAuthorizationId','ReleaseTag','ArchivePath','VerifiedReleasePath') }).Count -eq 5
     }
     if (-not $compatible) { throw [NotSupportedException]::new('Ssrs.AutomaticDeployment.ToolkitIntegrationUnavailable') }
-    Assert-SsrsSelector $Context.standingAuthorizationId
     $target=$Context.target
     if ($target.targetId -cne $Release.targetId -or $target.applicationId -cne 'ssrs-web') { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
     $classification=& $module { param($Tag) Test-ClcRelease -ReleaseTag $Tag } $Release.tag
@@ -34,5 +33,5 @@ function Invoke-SsrsToolkitAutomaticDeployment($Release,$Context) {
     return & $module {
         param($Target,$Standing,$Tag,$Archive,$Identity)
         Invoke-ClcIisDeployment -TargetId $Target -StandingAuthorizationId $Standing -ReleaseTag $Tag -ArchivePath $Archive -VerifiedReleasePath $Identity
-    } $Release.targetId $Context.standingAuthorizationId $Release.tag $archive $record
+    } $Release.targetId $Release.targetId $Release.tag $archive $record
 }

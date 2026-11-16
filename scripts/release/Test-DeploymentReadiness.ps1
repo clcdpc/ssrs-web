@@ -25,7 +25,7 @@ $scripts=@([regex]::Matches($workflow,'(?m)^        run: \|\n((?:^          .*\n
 Test-Case 'Actionlint 1.7.12 accepts the GitHub Actions YAML and expressions' {
     $version=& $ActionlintPath -version 2>&1
     Assert-True ($LASTEXITCODE -eq 0 -and $version[0] -ceq '1.7.12')
-    & $ActionlintPath $workflowPath
+    & $ActionlintPath @((Get-ChildItem -LiteralPath (Join-Path $repository '.github/workflows') -Filter '*.yml').FullName)
     Assert-True ($LASTEXITCODE -eq 0)
 }
 Test-Case 'Only manual dispatch, three independent stages and read-only permissions are defined' {
@@ -51,9 +51,9 @@ Test-Case 'All executable shared code and checkout actions use the reviewed immu
 Test-Case 'Fixed repository, application, target, channel and environment bind both reports' {
     Assert-True ($github.Contains("if: github.repository == 'clcdpc/ssrs-web'"))
     foreach ($pair in @('application_id: ssrs-web','target_id: ssrs-web-dev','environment_name: ssrs-web-dev','integration_branch: master',
-        'deployment_channel: DEV','release_workflow: .github/workflows/release.yml','deployment_workflow: .github/workflows/deploy-release.yml',
-        'diagnostic_workflow: .github/workflows/diagnose-deployment.yml','activation_variable: SSRS_DEV_DEPLOYMENT_ENABLED',
-        'runner_group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}','runner_labels: self-hosted,Windows,X64,ssrs-web-dev','administrative: false')) {
+        'deployment_channel: DEV','release_workflow: .github/workflows/release.yml','deployment_workflow: .github/workflows/release.yml',
+        'diagnostic_workflow: .github/workflows/diagnose-deployment.yml',
+        'runner_labels: self-hosted,Windows,X64,ssrs-web-dev','administrative: false')) {
         Assert-True ($github.Contains("      $pair`n"))
     }
     foreach ($argument in @('-ApplicationId ssrs-web','-TargetId ssrs-web-dev','-EnvironmentName ssrs-web-dev','-DeploymentChannel DEV',
@@ -62,22 +62,21 @@ Test-Case 'Fixed repository, application, target, channel and environment bind b
     }
     Assert-True ($hostJob.Contains('    environment: ssrs-web-dev'))
 }
-Test-Case 'Hosted inspection passes the runner-group variable unchanged without configuration or activation guards' {
+Test-Case 'Hosted inspection has no runner-group or deployment-activation variable dependency' {
     Assert-True ($github -cmatch '(?m)^    if: github\.repository == ''clcdpc/ssrs-web''$')
     Assert-True (@([regex]::Matches($github,'(?m)^    if:')).Count -eq 1)
     $runnerGroups=@([regex]::Matches($github,'(?m)^      runner_group: (.*)$'))
-    Assert-True ($runnerGroups.Count -eq 1 -and $runnerGroups[0].Groups[1].Value -ceq '${{ vars.SSRS_DEV_RUNNER_GROUP }}')
+    Assert-True ($runnerGroups.Count -eq 0 -and -not $github.Contains('activation_variable:'))
 }
 Test-Case 'Routing requires protected source and separate diagnostic activation before host admission' {
     $condition=[regex]::Match($hostJob,'(?ms)^    if: >-\n(.*?)(?=^    runs-on:)').Groups[1].Value
     foreach ($guard in @("github.repository == 'clcdpc/ssrs-web'","github.event_name == 'workflow_dispatch'","github.ref == 'refs/heads/master'",
         'github.ref_protected',"github.workflow_ref == 'clcdpc/ssrs-web/.github/workflows/diagnose-deployment.yml@refs/heads/master'",
-        'github.workflow_sha == github.sha',"vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY == 'true'","vars.SSRS_DEV_RUNNER_GROUP != ''","vars.SSRS_DEV_RUNNER_LABELS != ''")) {
+        'github.workflow_sha == github.sha',"vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY == 'true'")) {
         Assert-True ($condition.Contains($guard))
     }
     Assert-True ($condition -cnotmatch '\|\|')
-    Assert-True ($hostJob.Contains('      group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}'))
-    Assert-True ($hostJob.Contains("      labels: `${{ fromJSON(vars.SSRS_DEV_RUNNER_LABELS || '[]') }}"))
+    Assert-True ($hostJob.Contains('    runs-on: [self-hosted, Windows, X64, ssrs-web-dev]'))
     Assert-True ($hostJob -cnotmatch 'SSRS_DEV_DEPLOYMENT_ENABLED|SSRS_DEV_RUNNER_ADMISSION_READY|inputs\.|authorization_id|release_approval|first_cutover|StandingAuthorization')
     Assert-True ($hostJob -cnotmatch 'github\.token|GH_TOKEN|INSPECTION_TOKEN|id-token|environment: deployment-configuration-inspection')
 }
@@ -175,7 +174,7 @@ exit 37
         }
     }
 }
-Test-Case 'Diagnostic workflow selectors resolve to the current producer and protected consumer' {
+Test-Case 'Diagnostic selectors resolve to the single tag workflow and separate diagnostic' {
     foreach ($selector in @('release_workflow','deployment_workflow','diagnostic_workflow')) {
         $path=[regex]::Match($github,"(?m)^      ${selector}: (.+)$").Groups[1].Value
         Assert-True ($path -and [IO.File]::Exists((Join-Path $repository $path)))
@@ -191,7 +190,7 @@ Test-Case 'Windows CI retains both tag-driven and read-only diagnostic regressio
     }
 }
 Test-Case 'No normal release/deployment/verification workflow invokes or depends on the diagnostic' {
-    foreach ($file in @('release.yml','deploy-release.yml','verify.yml')) {
+    foreach ($file in @('release.yml','verify.yml')) {
         $text=[IO.File]::ReadAllText((Join-Path $repository ".github/workflows/$file"))
         Assert-True ($text -cnotmatch 'diagnose-deployment\.yml|SSRS_DEV_DIAGNOSTIC_RUNNER_READY|Merge-DeploymentReadiness|validate-deployment\.yml')
     }
