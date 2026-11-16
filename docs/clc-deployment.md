@@ -1,10 +1,20 @@
 # CLC deployment integration
 
-Use this runbook with the exact toolkit pinned in [deployment/toolkit.lock.json](../deployment/toolkit.lock.json). Source integrity, host enrollment and application release approval are separate checks; none substitutes for the others.
+The general [CLC Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/setup-guide.md) is the architectural authority for tag-driven releases. This runbook supplies the detailed SSRS-specific implementation and acceptance procedures. The guide revision, build-time [toolkit lock](../deployment/toolkit.lock.json) and independently installed host runtime are separate dependencies.
 
 ## Qualification status
 
-The beta.3 companion and published toolkit passed locked restores, packaging interoperability and Windows consumer checks. The archive and inventory match the lock. **Live DEV/IIS qualification remains outstanding.** Synthetic tests do not qualify IIS, TLS, runtime identities, persistent keys, Entra, SSRS, SQL or subscription delivery. Withhold host authorization until required infrastructure approvals and host checks are complete.
+| Area | Status and remaining evidence |
+| --- | --- |
+| Code implementation | Tag-authoritative release/archive/deploy implemented; final architecture review found no code deviation |
+| CI and synthetic validation | Reproducible checks and their scope are recorded [below](#repeatable-local-checks); they do not establish live deployment |
+| External GitHub configuration | Operator verification of the [native policies, rulesets, environments and runners](#github-and-host-configuration-prerequisites) is still required; this task changes none of them |
+| Compatible runtime toolkit | Publication and independent host installation of the automated standing-deployment runtime remain unestablished; the beta.3 build lock does not supply that evidence |
+| Initial host enrollment/baseline | Ready enrollment and a successful independently approved baseline, followed by standing authorization, still require host evidence |
+| Live DEV acceptance | NOT RUN, including the tag-driven acceptance and seven-check IIS pilot |
+| Production qualification | NOT RUN; Production provisioning and acceptance require separate evidence |
+
+The beta.3 companion and published packaging toolkit passed locked restores, packaging interoperability and Windows consumer checks; the archive and inventory match the build lock. Synthetic tests do not qualify IIS, TLS, runtime identities, persistent keys, Entra, SSRS, SQL or subscription delivery. Complete independent host setup and the approved baseline before enabling standing authorization.
 
 SSRS uses the MIT-licensed `Clc.Deployment.AspNetCore` companion; the portal remains AGPL-3.0-only. Package locks and the toolkit lock are authoritative for versions and hashes. Toolkit installation or upgrades require separate infrastructure approval.
 
@@ -28,7 +38,7 @@ Only Production and Staging are supported. Validation emits one version-1 JSON o
 
 `GET /health/ready` bypasses authentication/cookie middleware and returns no-store JSON with seven contract fields. It passes only after local startup, persistent-key smoke and ApplicationStarted; unavailable startup, synthetic Development and stopping return 503. It does not test remote services. Other routes retain their normal authorization, and deployment never migrates SQL.
 
-Deployed builds require compiled `ClcIdentityKind=Release`, unique `ClcReleaseId` and full `ClcSourceCommit`. Local Synthetic builds cannot pass deployed validation/startup. Identity describes the bytes; protected release approval authorizes their use.
+Deployed builds require compiled `ClcIdentityKind=Release`, unique `ClcReleaseId` and full `ClcSourceCommit`. Local Synthetic builds cannot pass deployed validation/startup. Identity describes the bytes; the permitted tag push is the release decision, and independent host standing authorization determines whether an eligible routine release may deploy. Initial baseline and exceptional recovery retain separate exact authorization.
 
 ## Immutable release production
 
@@ -39,7 +49,7 @@ git tag v1.2.3-dev.4
 git push origin v1.2.3-dev.4
 ```
 
-[release.yml](../.github/workflows/release.yml) runs the workflow and release/deployment scripts from that exact tagged commit. DEV may select unmerged application, workflow and script changes without a PR. PR closure or branch advancement/deletion does not affect eligibility. GitHub's repository-wide Restrict actors policy and release-tag rules authorize tag creation; author/tagger metadata grants no authority.
+[release.yml](../.github/workflows/release.yml) runs the application code, workflow, release/deployment scripts and application-owned configuration selected by that exact tagged commit. DEV may select unmerged changes to any of them without PR lookup, review, approval, an open PR, current PR-head equality or master-file equality. Protected operational configuration on the host remains independently controlled. PR closure or branch advancement/deletion does not affect eligibility. GitHub's repository-wide Restrict actors policy controls workflow execution; native tag rulesets control tag creation. Author/tagger metadata grants no authority.
 
 | Tag | Source eligibility | Archive and automatic target |
 | --- | --- | --- |
@@ -48,9 +58,9 @@ git push origin v1.2.3-dev.4
 | `vMAJOR.MINOR.PATCH-rc.N` | Any selected commit | GitHub prerelease; no deployment |
 | `vMAJOR.MINOR.PATCH` | Commit contained in protected master history | GitHub Release; `ssrs-web-production` |
 
-Major/minor/patch are 0..9999 and N is 1..9998, without leading zeroes. Case changes, build metadata and other suffixes are rejected. For production, select a commit contained in master and push the corresponding stable tag. This change provisions no production infrastructure.
+Major/minor/patch are 0..9999 and N is 1..9998, without leading zeroes. Case changes, build metadata and other suffixes are rejected. For Production, select a commit contained in protected master history and push the corresponding stable tag; it need not equal current master HEAD. This change provisions no production infrastructure.
 
-The ordered jobs are `release -> archive -> deploy`. The new workflow name also avoids matching the old completion consumer before its removal reaches master. Build/test failure prevents publication; publication failure prevents deployment. Beta/RC stop after archive.
+The single tag-push workflow has ordered jobs `release -> archive -> deploy`. Build/test failure prevents publication; publication failure prevents deployment. Beta/RC stop after archive. Routine operation requires no release dispatch, protected-master completion consumer, formal PR admission, manual deployment approval or additional CLC release-approval service/credential.
 
 The hosted Windows `release` job verifies exact source bytes and tag/object identity, restores locked dependencies with the SDK in `global.json`, builds/tests, compiles attempt-specific Release identity, exports notices and packages framework-dependent `net10.0/win-x64` without apphost/debug symbols. The authenticated published packaging toolkit has no host deployment authority. Runtime packages exclude SQL/administrative setup, Mock and operational configuration.
 
@@ -70,7 +80,7 @@ For a fresh build of the same tag, rerun **all jobs** of its original push run: 
 
 ## Tag-driven automatic deployment
 
-Successful archival automatically routes DEV/stable tags to their target. Target, GitHub environment, runner label, host authorization ID and standing authorization ID all use `ssrs-web-dev` or `ssrs-web-production`. Runner selection is `[self-hosted, Windows, X64, <target-id>]`. Repository-scoped runners and organization runners available to this repository work without mandatory groups or routing variables.
+Successful archival automatically routes DEV/stable tags for application ID `ssrs-web` to their target. GitHub environment, dedicated runner label, deployment target, host authorization ID and standing authorization ID all use `ssrs-web-dev` or `ssrs-web-production`. These are separate protected resources sharing a naming convention. Runner selection is `[self-hosted, Windows, X64, <target-id>]`; no routing variables or runner selectors are required.
 
 The elevated job downloads only the fixed deployment-script list from the tagged workflow commit, checking Git blob hashes against its tree. After queueing it repeats tag/object/source, workflow/run/attempt, successful release/archive job and artifact/hash verification. It authenticates the independently installed toolkit, requires Ready enrollment and application preflight, and checks the protected target before invoking deployment. Package contents cannot replace the installed toolkit, enrollment, infrastructure configuration, standing policy, credentials or host security policy. Packaged scripts never execute.
 
@@ -78,14 +88,24 @@ DEV and production have separate target concurrency groups with `cancel-in-progr
 
 ### GitHub and host configuration prerequisites
 
-Provision these once through separate repository/infrastructure administration:
+Provision these once through separate repository/infrastructure administration, following the [Setup Guide](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/setup-guide.md):
 
-- Repository-wide Restrict actors policy, active release-tag creation ruleset, separate tag update/deletion protection, protected master and GitHub release immutability.
-- `ssrs-web-dev` and `ssrs-web-production` environments without branch/tag restrictions or required deployment reviewers. No per-release approval or per-PR exception is required.
-- Dedicated Windows x64 deployment runners labeled with their target ID and independently admitted to the repository. Build/test/archive stay on GitHub-hosted Windows; exact runner-group workflow allowlists are unnecessary.
-- Independently authenticated/installed compatible CLC toolkit, protected host authorization named `<target-id>`, Ready enrollment and a separately approved deployed baseline. Provision an enabled target-scoped standing authorization named `<target-id>` through infrastructure administration.
+1. In **Repository Settings > Actions > Policies**, create an **Active Restrict actors** policy covering **all repository workflows**, selecting the authorized release developers/automation. Review effective organization/enterprise policy too. This native execution policy does not grant tag-creation permission.
+2. In **Repository Settings > Rules > Rulesets**, create **two Active tag rulesets**, both matching **`v*`**:
 
-Naming grants no authority: missing, invalid or revoked host/standing authorization prevents deployment. No deployment activation or routing variables, manual dispatch, recurring GitHub changes or extra actor database are required. The optional read-only host diagnostic has its own separate opt-in, never used by release jobs. This implementation changes no live GitHub settings or infrastructure.
+   | Ruleset | Restrictions | Bypass configuration |
+   | --- | --- | --- |
+   | Release tag creation | **Restrict creations** only | Authorized release-developer team with **Always allow** bypass; an empty list or pull-request-only bypass does not permit tag creation |
+   | Immutable release tags | **Restrict updates** and **Restrict deletions** | No routine release-developer bypass |
+
+   A bypass applies to **all restrictions in its ruleset**. Keep creation separate so authorized developers can create tags while ordinarily being unable to move or delete existing ones. Review inherited rulesets, patterns, exclusions and bypass membership together; a creation bypass cannot override a different applicable restriction.
+3. Protect **master** against force pushes and deletion, preserving the application's existing required CI checks from [verify.yml](../.github/workflows/verify.yml). No additional PR-branch protection is required.
+4. Separately enable **Repository Settings > General > Releases > Release immutability** **before publication** (or verify owner-enforced immutability). Tag rulesets alone do not establish immutable Release assets; canonical Releases must report Boolean `immutable: true` as described above.
+5. Create **ssrs-web-dev** and **ssrs-web-production** environments. For **both**, set **Deployment branches and tags: No restriction**, with **no required reviewers, wait timers or additional deployment protection gates**.
+6. Register dedicated **Windows x64 self-hosted** deployment runners. **Repository-scoped runners are preferred**, with labels `self-hosted`, `Windows`, `X64` and the derived target ID. They require no runner group or protected-master workflow allowlist. **Organization-scoped runners are an alternative** when their group grants this repository access. Build/test/archive stay on GitHub-hosted Windows; ordinary Linux/browser CI stays on GitHub-hosted Ubuntu with its existing trusted-contributor admission.
+7. Independently authenticate/install a [compatible runtime toolkit](#toolkit-integration-and-host-trust), provision protected host configuration/target identity and host authorization named `<target-id>`, then complete [enrollment and the separately approved initial baseline](#initial-cutover-baseline-and-exceptional-recovery). **Only after the baseline succeeds**, provision enabled target-scoped [standing authorization](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/automated-deployments.md) named `<target-id>`, bound to this repository, `release.yml`/`release`, channel, target and lineage. DEV policy must permit unmerged DEV tags.
+
+Naming grants no authority: missing, invalid or revoked host/standing authorization prevents deployment. Standing authorization persists until changed or revoked; it is not another human approval for every version tag. No deployment activation flags, per-PR configuration, manual release dispatch, recurring GitHub changes or extra actor database are required. The optional read-only host diagnostic has its own separate opt-in, never used by release jobs. This implementation changes no live GitHub settings or infrastructure.
 
 ### Toolkit integration and host trust
 
@@ -98,7 +118,7 @@ Invoke-ClcIisDeployment -TargetId $target -StandingAuthorizationId $target `
 
 The tagged deployment adapter creates unique, create-new ZIP/identity files inside the authenticated target inbox. The strict identity binds repository/tag/source, manifest/package hashes and exact producer run/attempt/job/artifact/transport. It is evidence, not an approval record. The toolkit enforces standing scope/revocation, baseline/lineage/tag-source binding, rebuild ordering and downgrade policy under its existing lock, then performs the existing IIS/backup/readiness lifecycle. No per-release approval writer, signing producer, attestation or Sigstore dependency is used.
 
-The adapter rejects an installed module lacking the five-parameter Automated API. The build lock remains published `0.1.0-beta.3`. [clc-deployment PR #2](https://github.com/clcdpc/clc-deployment/pull/2) merged as `7f814ef838abcfd12ade494c429918657598c35d`; compatible API publication and host installation have not been established here. Exact toolkit implementation/contract test evidence is recorded below. Compatible toolkit publication, independent host installation and real-host qualification remain activation prerequisites.
+The adapter rejects an installed module lacking the five-parameter Automated API. The **build-time** lock remains published `0.1.0-beta.3`; do not replace it automatically or assume that distribution contains the merged automated standing-deployment runtime. [clc-deployment PR #2](https://github.com/clcdpc/clc-deployment/pull/2) merged as `7f814ef838abcfd12ade494c429918657598c35d`, but compatible runtime publication and independent host installation have not been established here. Exact toolkit implementation/contract test evidence is recorded below. Compatible runtime publication, independent installation and real-host qualification remain prerequisites for routine deployment. Application releases cannot install/replace the runtime, enroll infrastructure, modify protected host configuration, authorize downgrades or authorize exceptional recovery.
 
 Infrastructure supplies the reviewed nonsecret [deployment configuration](../deployment/deployment.example.json), protected host authorization/enrollment lock/evidence, and independently authenticated bootstrap module/tools/`source.commit`/retained distribution at `%ProgramData%\CLC\Deployment\Bootstrap\ssrs-web`. Bootstrap, active-host and build-toolkit pins are separate.
 
@@ -114,7 +134,7 @@ The diagnostic runs manually from protected master with the separate `SSRS_DEV_D
 
 ## SSRS-specific DEV preflight
 
-Use the locked toolkit's [installation](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/installation.md), [enrollment](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/host-enrollment.md), [deployment/recovery](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/a3a94cd26daa583d392f73e99e56872876a88467/docs/iis-verification.md) guides alongside this checklist.
+Use the Setup Guide's [installation](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/installation.md), [enrollment](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/host-enrollment.md), [deployment/recovery](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/iis-verification.md) instructions alongside this checklist. Execute host commands using the exact independently authenticated installed runtime and its matching contracts, not merely the build-time lock.
 
 `Get-ClcHostEnrollment` and `Initialize-ClcHostEnrollment -Operation Plan` are read-only. `Ready` skips initialization; `ToolkitNotInitialized` or `TargetNotEnrolled` requires separate exact setup authorization. `Incomplete`, `DriftDetected` or `RecoveryRequired` stops for reconciliation, not Apply-based repair. Enrollment readiness does not prove application approval, settings or readiness.
 
@@ -199,24 +219,35 @@ Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedB
 Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedC
 # Inspect failed attempt and all backups before explicitly restoring B.
 Restore-ClcIisDeployment -TargetId ssrs-web-dev -AttemptId $latestFailedAttemptId `
-    -Mode RestorePrevious -Reason $nonsecretIncidentReference
+    -Mode RestorePrevious -Reason $nonsecretIncidentReference -RecoveryApprovalId $independentExactApproval
 ```
 
 The synthetic fixture's AcceptCandidate case does not establish live RestorePrevious acceptance. Record actual host observations before changing any live status.
+
+## Planned DEV and Production tag acceptance
+
+**Both channels remain NOT RUN.** After independent GitHub/runtime provisioning, enrollment and successful approved baseline, establish standing authorization for each target. The seven-check pilot above is separately authorized commissioning/recovery work; its explicit approvals are not the routine tag procedure.
+
+1. **DEV:** Select an unmerged commit containing workflow, deployment-script and application-owned configuration changes, without requiring a PR or master-file equality. Create and push a new permitted `vN.N.N-dev.N` tag at that exact commit. Observe hosted `release -> archive` success, an immutable canonical prerelease, then automatic `deploy` on the dedicated `ssrs-web-dev` runner/environment. Retain tag/object/source/workflow/run/attempt/job/artifact/transport/package/manifest/compiled identities, host outcome and exact readiness. Complete the [SSRS-specific preflight](#ssrs-specific-dev-preflight), [seven-check pilot](#planned-real-dev-seven-check-pilot) and [live application gates](operations/README.md#live-gate-checklist).
+2. **Failure and ordering:** In separately authorized acceptance cases, verify build/test failure blocks publication, publication failure blocks deployment, beta/RC archive without privileged deployment, same-tag full-run rebuild preserves canonical assets and uses distinct build identity, newer eligible tags supersede older ones, and revoked standing policy/downgrades fail closed. Preserve host evidence and follow [exceptional recovery](#initial-cutover-baseline-and-exceptional-recovery) for failed mutation; do not move tags or repair canonical assets.
+3. **Production:** Independently qualify the Production host/configuration/keys/identities and baseline, then enable its standing authorization. Select an exact commit contained in protected master history (including an older ancestor, not just HEAD), create/push a new stable `vN.N.N` tag and observe the same ordered hosted qualification/publication followed by `ssrs-web-production` deployment. Reconcile all identities, exact readiness, backups and application acceptance with the Production target; DEV evidence alone does not qualify Production. Synthetic admission must also refuse a stable source outside master before publication/deployment.
+
+After commissioning, routine operation for either target is only creating and pushing its permitted version tag. Retain deployment and recovery evidence beyond temporary Actions artifact retention.
 
 ## Repeatable local checks
 
 Offline GitHub API and host fixtures cover unmerged DEV workflow/script changes without PR lookups, stable ancestry, in-progress same-run qualification, failed/incomplete jobs, exact run/attempt/artifact identity, canonical compatibility, routing, supersession and authorization rejection. Transport/package ZIP hashes and a clean-process publisher test exercise actual validation/publication code. Generated evidence stays under ignored `artifacts/`; implementation creates no real version tags or Releases.
 
-Current local Windows verification passed locked restore/Release build and 1,432 .NET tests, 28 tag admission/deployment checks, 13 archive/publisher checks, 29 packaging checks, 32 host safeguards, 13 diagnostic checks and 12 combined Windows/toolkit checks against exact source `7f814ef838abcfd12ade494c429918657598c35d`. Combined checks use actual NTFS changes and loopback readiness with synthetic IIS, including Deployed/NoOp, same-tag packages, downgrade/older-build rejection and revoked policies. The current synthetic browser suite passed 363 accessibility scans (historical broader coverage included 376). Configuration publish guard, locked npm restore, npm/NuGet audits, Actionlint 1.7.12 across every workflow, PowerShell syntax and generated-artifact checks also passed. These passes establish no live GitHub publication, installed-toolkit availability or IIS/SQL acceptance.
+Local Windows verification passed locked restore/Release build and 1,432 .NET tests (including deployment compatibility), 28 tag admission/deployment checks, 13 archive/publisher checks, 22 ordinary/CLC Release packaging checks, 32 host safeguards and 13 diagnostic checks. Configuration publish guard, separate administrative artifact checks, locked npm restore, npm/NuGet audits, Actionlint 1.7.12 across every workflow, PowerShell/JavaScript syntax and generated-artifact policy/tests also passed. Documentation checks verified local links/anchors and six pinned upstream paths.
 
-Real DEV acceptance must separately push an authorized DEV tag containing unmerged workflow/script changes, observe successful release/archive/deploy jobs, reconcile package/outcome evidence and exercise failure/supersession/rebuild cases. Production infrastructure is unchanged. All seven live checks above and known-record SSRS report-boundary acceptance remain NOT RUN.
+Prior Windows/toolkit integration evidence at `ea379fb` records 29 packaging and 12 combined checks against exact toolkit source `7f814ef838abcfd12ade494c429918657598c35d`; those interoperability checks were not rerun for this documentation-only alignment. They used actual NTFS changes and loopback readiness with synthetic IIS, covering Deployed/NoOp, same-tag packages, downgrade/older-build rejection and revoked policies. These passes establish no live GitHub publication, installed-toolkit availability or IIS/SSRS/SQL acceptance.
+
+The [DEV and Production tag acceptance](#planned-dev-and-production-tag-acceptance), all seven live IIS checks and known-record SSRS report-boundary acceptance remain open. Production infrastructure is unchanged.
 
 From the repository root:
 
 ```powershell
 dotnet restore SsrsPortal.slnx --locked-mode
-dotnet restore src/SsrsPortal/SsrsPortal.csproj --locked-mode -p:ClcIdentityKind=Release
 dotnet build SsrsPortal.slnx -c Release --no-restore
 dotnet test SsrsPortal.slnx -c Release --no-build
 pwsh -NoProfile -File scripts/release/Test-DevDeployment.ps1
@@ -226,7 +257,7 @@ pwsh -NoProfile -File scripts/release/Test-DeploymentReadiness.ps1 -ActionlintPa
 pwsh -NoProfile -File scripts/release/Test-ReleasePackaging.ps1
 ```
 
-The packaging script's Windows interoperability branch additionally needs `-PublishDirectory`, `-SyntheticToolkitArchive` and `-SyntheticToolkitLock`. Never copy its synthetic pin into production configuration.
+Use the [README verification](../README.md#verification) for ordinary publish/browser checks and the [Windows compatibility CI job](../.github/workflows/verify.yml) for exact `win-x64` Release publish arguments. Pass both `-PublishDirectory` and `-OrdinaryPublishDirectory` to check those actual outputs. The packaging script's optional Windows/toolkit interoperability branch additionally needs `-SyntheticToolkitArchive` and `-SyntheticToolkitLock`. Never copy its synthetic pin into production configuration.
 
 For the combined Windows fixture:
 
