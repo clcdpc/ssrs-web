@@ -14,6 +14,8 @@ function Get-SsrsCanonicalArchive($Tag,$Reference) {
     # Bind the peeled live tag and archived full commit/object identity below.
     if ($release.draft -ne $false -or $release.tag_name -cne $Tag.tag -or
         $release.prerelease -ne ($Tag.channel -cne 'stable') -or $release.author.id -ne 41898282 -or $release.author.login -cne 'github-actions[bot]') { Stop-TagRelease 'ArchiveIdentityMismatch' }
+    # JSON must report the Boolean true; missing or truthy values are not proof.
+    if ($release['immutable'] -isnot [bool] -or $release['immutable'] -ne $true) { Stop-TagRelease 'ArchiveImmutableRequired' }
     $assets=Get-TagPages ('/repos/clcdpc/ssrs-web/releases/'+$release.id+'/assets') ''
     foreach ($name in @('release.zip','release-metadata.json','release-provenance.json','SHA256SUMS','LICENSE','THIRD-PARTY-NOTICES.md')) {
         $selected=@($assets | Where-Object name -CEQ $name)
