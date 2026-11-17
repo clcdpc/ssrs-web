@@ -125,6 +125,13 @@ public sealed class ProgramDeploymentIntegrationTests
         Assert.AreEqual("Release", publishedIdentity.Kind);
         Assert.IsTrue(publishedIdentity.IsRelease);
 
+        var forbiddenOverride = Path.Combine(artifacts, "override", "application.json");
+        var developmentOverride = await RunPublishedArguments(publish,
+            ["--environment", "Development", "--SsrsPortal:TestConfigurationFile", forbiddenOverride]);
+        Assert.AreNotEqual(0, developmentOverride.ExitCode);
+        StringAssert.Contains(developmentOverride.StandardError, "Release startup requires Production or Staging.");
+        Assert.IsFalse(Directory.Exists(Path.GetDirectoryName(forbiddenOverride)), "Released bytes must reject Development path overrides before configuration or logging.");
+
         var programData = ProgramDataPath.Root;
         Assert.IsTrue(Path.IsPathFullyQualified(programData), "CommonApplicationData must resolve to a fully qualified Windows path.");
         Assert.AreEqual(programData, InToolkitMinimalEnvironment(() => ProgramDataPath.Root),

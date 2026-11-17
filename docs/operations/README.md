@@ -52,7 +52,7 @@ Released DEV builds use `CommonApplicationData\clc-ssrs-web-dev\Config\applicati
 
 A published build supports hostless path discovery with `dotnet <published SsrsPortal.dll> --clc-appdata-directory` before configuration is provisioned. It prints only the absolute application data root. It does not create directories, load `application.json`, initialize logging or start the host. It does not establish file access, IIS enrollment or deployment readiness; continue through the separate configuration, ACL, enrollment and readiness checks below.
 
-`SsrsPortal:TestConfigurationFile` exists only for isolated Development fixtures. Production and Staging reject it before reading a file. Never configure it in IIS.
+`SsrsPortal:TestConfigurationFile` exists only for isolated Synthetic Development fixtures. Released DLLs reject Development before configuration, logging or key setup. Production and Staging reject it before reading a file. Never configure it in IIS.
 
 The sanitized example is included in the published application. On a missing file, one normal startup under an appropriately permitted setup identity creates the application data and `Config` directories, copies the example byte-for-byte, then stops with an instruction to edit and restart. Run this on the target host from a trusted published build:
 
