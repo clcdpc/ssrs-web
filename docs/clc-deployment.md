@@ -9,12 +9,13 @@ The general [CLC Deployment Setup Guide](https://github.com/clcdpc/clc-deploymen
 | Code implementation | Target-local release/archive/deploy integration implemented; independent review and CI remain required |
 | CI and synthetic validation | Reproducible checks and their scope are recorded [below](#repeatable-local-checks); they do not establish live deployment |
 | External GitHub configuration | Operator verification of the [native policies, rulesets, environments and runners](#github-and-host-configuration-prerequisites) is still required; this task changes none of them |
-| Compatible runtime toolkit | A real renamed format-3 toolkit publication, verified build re-pin and independent target-local host installation remain prerequisites; beta.3 is historical and incompatible |
+| Build-time toolkit | Published `Clc.Deployment` `0.1.0-beta.4` format 3 is independently pinned and exercised by Windows packaging CI |
+| Compatible runtime toolkit | Independent target-local host installation, verification and activation remain prerequisites; DEV and Production may use different compatible versions |
 | Initial host enrollment/baseline | Ready enrollment and a successful independently approved baseline, followed by standing authorization, still require host evidence |
 | Live DEV acceptance | NOT RUN, including the tag-driven acceptance and seven-check IIS pilot |
 | Production qualification | NOT RUN; Production provisioning and acceptance require separate evidence |
 
-The beta.3 ASP.NET Core companion remains pinned and compatible. The immutable beta.3 PowerShell distribution uses the historical module layout and cannot build new target-local releases; its lock data is retained unchanged. New acquisition fails closed with `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` until a real format-3 release is independently verified and re-pinned. Synthetic tests do not qualify IIS, TLS, runtime identities, persistent keys, Entra, SSRS, SQL or subscription delivery. Complete independent host setup and the approved baseline before enabling standing authorization.
+The beta.3 ASP.NET Core companion remains pinned and compatible. The published beta.4 PowerShell distribution supplies the canonical `Clc.Deployment/Clc.Deployment.psd1` format-3 layout. The historical beta.3 PowerShell archive remains incompatible and is tested with its historical digest before format rejection. Synthetic and published-artifact packaging tests do not qualify IIS, TLS, runtime identities, persistent keys, Entra, SSRS, SQL or subscription delivery. Complete independent host setup and the approved baseline before enabling standing authorization.
 
 SSRS uses the MIT-licensed `Clc.Deployment.AspNetCore` companion; the portal remains AGPL-3.0-only. Package locks and the toolkit lock are authoritative for versions and hashes. Toolkit installation or upgrades require separate infrastructure approval.
 
@@ -118,7 +119,17 @@ Invoke-ClcIisDeployment -TargetId $target -StandingAuthorizationId $target `
 
 The tagged adapter creates unique ZIP/identity files in the authenticated target inbox. This evidence binds repository/tag/source, compiled target, manifest/package hashes and producer run/attempt/job/artifact/transport; it grants no authority. The independently installed target-local toolkit enforces standing scope/revocation, baseline/lineage, rebuild ordering and downgrade policy under the selected target's OS file lock, then performs its existing backup/readiness lifecycle. Application releases cannot enroll infrastructure, install/activate a toolkit, approve downgrades or authorize exceptional recovery.
 
-The **build-time** lock remains the legitimate published `0.1.0-beta.3` identity. It is incompatible with this architecture and deliberately fails closed. Publish a separately reviewed `Clc.Deployment-<version>.zip` format-3 release and independently verify its exact source, archive, inventory and asset identity before changing that lock. Local candidate distributions are test evidence only. Never reinterpret or republish beta.3 bytes.
+The **build-time** [lock](../deployment/toolkit.lock.json) authenticates published [`0.1.0-beta.4`](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.4), independently verified against release metadata, annotated tag `893a0f918a99e72189082b204b7ce994ff8dc76b`, the published manifest and downloaded bytes:
+
+| Identity | Verified value |
+| --- | --- |
+| Source commit | `557192eff5eea651d6f1a393eb3b196053a985e5` |
+| Distribution asset | `Clc.Deployment-0.1.0-beta.4.zip`, ID `759406206`, 464885 bytes |
+| Archive SHA-256 | `89459d9ad42e112aea475d51a596d944c683f957aa33cae1a3f0ad2d693a1654` |
+| Module inventory SHA-256 | `0c5ba7f3b1b884e2f9320b7e81fa7e3431b25c4aa25a255a8b6a1b83a2360e0d` |
+| Published manifest | Asset `759406153`, SHA-256 `8d1c2b0ee4b08415949c73f1a9d91fc402047c60a9af2b55991e5f2a1d042f6d` |
+
+The existing verifier derives and validates the module, source and required infrastructure inventories after independent archive authentication and before module import. The upstream beta.4 Release reports `immutable=false`; the exact pinned digest authenticates execution, and SSRS Web's own canonical application-release immutability requirement remains unchanged. This build pin grants no host installation, activation or application deployment permission. It neither selects nor upgrades a host runtime: DEV and Production retain independently protected toolkit versions and policies under `%ProgramData%\clc-ssrs-web-dev\Deployment` and `%ProgramData%\clc-ssrs-web-production\Deployment`. Local candidate distributions remain test evidence only.
 
 Infrastructure supplies the reviewed nonsecret [deployment configuration](../deployment/deployment.example.json), protected host authorization/enrollment lock/evidence, and independently authenticated bootstrap module/tools/`source.commit`/retained distribution at `%ProgramData%\clc-<target-id>\Deployment\bootstrap`. The bootstrap has exactly `Clc.Deployment`, `tools`, `source.commit` and `distribution.zip`; `distribution.json` stays inside the archive. Its executable inventory, source and complete ZIP are independently approved before first execution. Native path/ACL/link/stream checks and held handles protect that boundary.
 
@@ -252,7 +263,9 @@ pwsh -NoProfile -File ./scripts/release/Test-DeploymentIntegration.ps1 `
     -ToolkitSourceCommit 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d -BuildInputs
 ```
 
-The historical beta.3 archive remains unchanged and is rejected before extraction by the new acquisition path. Local candidates are neither published pins nor host authority. Final independent review, PR CI, a real renamed toolkit publication/re-pin, independently authorized target-local enrollment and live acceptance remain separate gates.
+The Windows compatibility job also runs `Test-ReleasePackaging.ps1 -PublishDirectory <actual CLC Release publish> -PublishedToolkit`. This opt-in path downloads beta.4 through the checked-in asset URI, authenticates its archive before evaluating its verifier, checks format 3 and canonical import, packages actual Release output and validates builder/source/compiled target/producer bindings. Negative tests reject wrong source, version and inventory pins; offline tests cover wrong archive digests, invalid/duplicate/case-colliding entries and legacy names. The historical beta.3 archive is authenticated with its historical lock before format rejection. Omitting `-PublishedToolkit` keeps ordinary tests offline; the independent `dev.2` builder/`dev.1` runtime rehearsal is unchanged.
+
+Published beta.4 packaging removes the historical build-toolkit incompatibility. Independently authorized target-local installation/activation, enrollment, approved initial baseline, standing authorization and live acceptance remain outstanding. Packaging tests create no GitHub Release and perform no enrollment, IIS changes or deployment.
 
 The [DEV and Production tag acceptance](#planned-dev-and-production-tag-acceptance), all seven live IIS checks and known-record SSRS report-boundary acceptance remain open. Production infrastructure is unchanged.
 

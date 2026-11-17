@@ -1,12 +1,13 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param([string] $PublishDirectory,[string] $OrdinaryPublishDirectory,[string] $SyntheticToolkitArchive,[string] $SyntheticToolkitLock,[string] $HistoricalToolkitArchive)
+param([string] $PublishDirectory,[string] $OrdinaryPublishDirectory,[string] $SyntheticToolkitArchive,[string] $SyntheticToolkitLock,[string] $HistoricalToolkitArchive,[switch] $PublishedToolkit)
 . "$PSScriptRoot/Release.Common.ps1"
 . "$PSScriptRoot/ExactSourceBytes.Common.ps1"
 $repositoryRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $work=Join-Path $repositoryRoot ('artifacts/release-packaging-tests/'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($work)
 $results=[Collections.Generic.List[object]]::new()
+if ($PublishedToolkit -and (-not $IsWindows -or -not $PublishDirectory)) { throw 'Published toolkit packaging requires Windows and an actual CLC Release publish directory.' }
 function Test-Case {
     [CmdletBinding()]
     param(
@@ -276,11 +277,72 @@ try {
         Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $lockPath -Destination (Join-Path $work 'untrusted-builder') -ArchivePath $evil } 'Release.ToolkitArchivePinMismatch'
         Assert-True (-not [IO.Path]::Exists($sentinel)); Assert-True (-not [IO.Path]::Exists((Join-Path $work 'untrusted-builder')))
     }
-    if ($HistoricalToolkitArchive) {
-        Test-Case 'Real immutable beta.3 pin remains historical and fails closed before extraction' {
-            $destination=Join-Path $work 'historical-toolkit'
-            Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath (Join-Path $repositoryRoot 'deployment/toolkit.lock.json') -Destination $destination -ArchivePath ([IO.Path]::GetFullPath($HistoricalToolkitArchive)) } 'Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired'
+    Test-Case 'Authenticated old formats and unexpected, duplicate, case-colliding or legacy module entries fail before extraction' {
+        foreach ($kind in @('old-format','unexpected','duplicate','case-collision','legacy-module')) {
+            $archive=Join-Path $work ($kind+'.zip'); $destination=Join-Path $work ($kind+'-builder')
+            $stream=[IO.File]::Create($archive); $zip=[IO.Compression.ZipArchive]::new($stream,[IO.Compression.ZipArchiveMode]::Create,$true)
+            try {
+                $names=@('distribution.json')
+                $names+=switch ($kind) {
+                    'unexpected' { 'unexpected.txt' }
+                    'duplicate' { 'source.commit'; 'source.commit' }
+                    'case-collision' { 'source.commit'; 'Source.commit' }
+                    'legacy-module' { 'CLC.Deployment/CLC.Deployment.psd1' }
+                }
+                foreach ($name in $names) {
+                    $entry=$zip.CreateEntry($name); $entry.ExternalAttributes=0; $output=$entry.Open()
+                    try { $output.Write([Text.Encoding]::UTF8.GetBytes($(if ($kind -eq 'old-format') {'{"formatVersion":2}'} else {'{"formatVersion":3}'}))) } finally { $output.Dispose() }
+                }
+            } finally { $zip.Dispose(); $stream.Dispose() }
+            $lock=Read-ReleaseJson ([IO.File]::ReadAllBytes((Join-Path $repositoryRoot 'deployment/toolkit.lock.json')))
+            $lock.distributionSha256=Get-ReleaseHash $archive
+            $lockPath=Join-Path $work ($kind+'.lock.json'); [IO.File]::WriteAllText($lockPath,($lock | ConvertTo-Json -Compress))
+            $code=if ($kind -eq 'old-format') {'Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired'} else {'Release.ToolkitArchiveShape'}
+            Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $lockPath -Destination $destination -ArchivePath $archive } $code
             Assert-True (-not [IO.Path]::Exists($destination))
+        }
+    }
+    if ($HistoricalToolkitArchive -or $PublishedToolkit) {
+        Test-Case 'Real beta.3 archive authenticates with its historical pin then fails format validation before extraction' {
+            # Keep the historical identity independent of the current build pin:
+            # otherwise archive authentication would mask the format rejection.
+            $historicalLock=@{schemaVersion=1;repository='clcdpc/clc-deployment';sourceCommit='a3a94cd26daa583d392f73e99e56872876a88467';version='0.1.0-beta.3';
+                distributionSha256='7afcf9a22442d205840831b803edba4a46c1684cb00063c78592e16e21aac4b3';
+                moduleInventorySha256='e285ea0ae2300d91f30f647dc32ed4e08f4b586e3c3275dd03a6267f91786913';
+                distributionUri='https://api.github.com/repos/clcdpc/clc-deployment/releases/assets/744767900'}
+            $historicalPath=Join-Path $work 'historical.lock.json'; [IO.File]::WriteAllText($historicalPath,($historicalLock | ConvertTo-Json -Compress))
+            $destination=Join-Path $work 'historical-toolkit'
+            $acquire=@{LockPath=$historicalPath;Destination=$destination}
+            if ($HistoricalToolkitArchive) { $acquire.ArchivePath=[IO.Path]::GetFullPath($HistoricalToolkitArchive) }
+            Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" @acquire } 'Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired'
+            Assert-True (-not [IO.Path]::Exists($destination))
+        }
+    }
+    if ($PublishedToolkit) {
+        $publishedLockPath=Join-Path $repositoryRoot 'deployment/toolkit.lock.json'
+        $publishedLock=Read-ReleaseJson ([IO.File]::ReadAllBytes($publishedLockPath))
+        $publishedRoot=Join-Path $work 'published-toolkit'
+        Test-Case 'Checked-in lock downloads and verifies the published beta.4 format-3 distribution before canonical import' {
+            $builder=& "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $publishedLockPath -Destination $publishedRoot
+            Assert-True ($builder.executionPinVerified -and -not $builder.hostInstallationAuthorized -and -not $builder.applicationDeploymentAuthorized)
+            Assert-True ($builder.version -ceq '0.1.0-beta.4' -and $builder.sourceCommit -ceq $publishedLock.sourceCommit -and
+                $builder.distributionSha256 -ceq $publishedLock.distributionSha256 -and $builder.moduleInventorySha256 -ceq $publishedLock.moduleInventorySha256)
+            $checked=& (Join-Path $publishedRoot 'tools/Test-ToolkitDistribution.ps1') -ArchivePath (Join-Path $publishedRoot 'distribution.zip') -ExpectedSha256 $publishedLock.distributionSha256 -ExpectedSourceCommit $publishedLock.sourceCommit -ExpectedVersion $publishedLock.version -InstalledModuleRoot (Join-Path $publishedRoot 'Clc.Deployment') -RequireInfrastructureTools
+            Assert-True ($checked.integrityVerified -and $checked.formatVersion -eq 3 -and $checked.moduleName -ceq 'Clc.Deployment' -and $checked.inventorySha256 -ceq $publishedLock.moduleInventorySha256)
+            Assert-True ((Get-ReleaseHash (Join-Path $publishedRoot 'distribution.zip')) -ceq $publishedLock.distributionSha256)
+            Import-Module $builder.moduleManifest -Force
+            $module=Get-Module Clc.Deployment
+            Assert-True ($module.Name -ceq 'Clc.Deployment' -and $module.Version.ToString() -ceq '0.1.0' -and $module.PrivateData.PSData.Prerelease -ceq 'beta.4' -and
+                $module.ModuleBase -ceq (Join-Path $publishedRoot 'Clc.Deployment'))
+        }
+        Test-Case 'Published archive rejects incorrect source, version and module inventory pins before module import' {
+            foreach ($field in @('sourceCommit','version','moduleInventorySha256')) {
+                $wrong=Read-ReleaseJson ([IO.File]::ReadAllBytes($publishedLockPath))
+                $wrong[$field]=switch ($field) { 'sourceCommit' {'0'*40} 'version' {'0.1.0-beta.999'} 'moduleInventorySha256' {'0'*64} }
+                $path=Join-Path $work ('wrong-published-'+$field+'.json'); [IO.File]::WriteAllText($path,($wrong | ConvertTo-Json -Compress))
+                $code=if ($field -eq 'moduleInventorySha256') {'Release.ToolkitInventoryPinMismatch'} else {'Distribution identity differs.'}
+                Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $path -Destination (Join-Path $work ('wrong-published-'+$field)) -ArchivePath (Join-Path $publishedRoot 'distribution.zip') } $code
+            }
         }
     }
     $empty=Join-Path $work 'empty-publish'; [void][IO.Directory]::CreateDirectory($empty)
@@ -505,6 +567,31 @@ try {
                 Assert-Fails { Assert-PortalPublish $copy $releaseId $sourceCommit } 'Release.ForbiddenPublishContent'
             }
         }
+        if ($PublishedToolkit) {
+            Test-Case 'Published beta.4 builder packages actual Release output with exact source, target and producer bindings' {
+                $output=Join-Path $work 'published-package'; [void][IO.Directory]::CreateDirectory($output)
+                $dependencyHash=Get-ReleaseDependencyLockHash $repositoryRoot
+                $evidence=& "$PSScriptRoot/New-PortalRelease.ps1" -PublishRoot $PublishDirectory -OutputDirectory $output -ToolkitLockPath $publishedLockPath -ToolkitDirectory (Join-Path $work 'published-package-toolkit') -ToolkitArchivePath (Join-Path $publishedRoot 'distribution.zip') -ReleaseId $releaseId -SourceCommit $sourceCommit -ReleaseTag $identity['Clc.ReleaseTag'] -RunId 42 -RunAttempt 2 -DependencyLockSha256 $dependencyHash -WorkflowCommit ('2'*40)
+                Assert-True ($evidence.integrityVerified -and -not $evidence.deploymentApproval -and -not $evidence.hostInstallationApproval -and
+                    $evidence.toolkitBuilder.module -ceq 'Clc.Deployment' -and $evidence.toolkitBuilder.version -ceq '0.1.0-beta.4' -and
+                    $evidence.toolkitBuilder.sourceCommit -ceq $publishedLock.sourceCommit -and $evidence.toolkitBuilder.distributionSha256 -ceq $publishedLock.distributionSha256 -and
+                    $evidence.moduleInventorySha256 -ceq $publishedLock.moduleInventorySha256 -and $evidence.sourceCommit -ceq $sourceCommit -and
+                    $evidence.releaseId -ceq $releaseId -and $evidence.runId -eq 42 -and $evidence.runAttempt -eq 2 -and $evidence.workflowCommit -ceq ('2'*40))
+                $archive=Join-Path $output 'release.zip'; $verified=Test-ClcRelease -ArchivePath $archive
+                Assert-True ($verified.integrityVerified -and -not $verified.authorizedForDeployment -and $verified.archiveSha256 -ceq $evidence.innerReleaseSha256 -and
+                    $verified.manifestSha256 -ceq $evidence.manifestSha256 -and $verified.inventorySha256 -ceq $evidence.inventorySha256)
+                $null=Assert-PortalReleaseArchive $archive $releaseId $sourceCommit $identity['Clc.ReleaseTag']
+                $zip=[IO.Compression.ZipFile]::OpenRead($archive)
+                try {
+                    $manifest=Read-ReleaseJson (Read-ReleaseEntry ($zip.GetEntry('manifest.json')))
+                    Assert-True ($manifest.builder.module -ceq 'Clc.Deployment' -and $manifest.builder.version -ceq '0.1.0-beta.4' -and
+                        $manifest.builder.sourceCommit -ceq $publishedLock.sourceCommit -and $manifest.builder.distributionSha256 -ceq $publishedLock.distributionSha256 -and
+                        $manifest.source.commit -ceq $sourceCommit -and $manifest.releaseId -ceq $releaseId -and $manifest.build.runId -eq 42 -and
+                        $manifest.build.runAttempt -eq 2 -and $manifest.build.job -ceq 'release' -and $manifest.build.workflowPath -ceq '.github/workflows/release.yml' -and
+                        $manifest.build.dependencyLockSha256 -ceq $dependencyHash)
+                } finally { $zip.Dispose() }
+            }
+        }
         if ($SyntheticToolkitArchive -and $SyntheticToolkitLock) {
             if (-not $IsWindows) { throw 'Native toolkit packaging qualification requires Windows.' }
             $package=Join-Path $work 'package'; [void][IO.Directory]::CreateDirectory($package)
@@ -557,7 +644,7 @@ try {
         }
     }
 } finally {
-    $report=[ordered]@{classification='synthetic-qualification';deploymentAuthorized=$false;discovered=$results.Count;passed=@($results | Where-Object status -EQ Passed).Count;failed=@($results | Where-Object status -EQ Failed).Count;nativeToolkitRequested=[bool]$SyntheticToolkitArchive;cases=$results}
+    $report=[ordered]@{classification='synthetic-qualification';deploymentAuthorized=$false;discovered=$results.Count;passed=@($results | Where-Object status -EQ Passed).Count;failed=@($results | Where-Object status -EQ Failed).Count;nativeToolkitRequested=[bool]($SyntheticToolkitArchive -or $PublishedToolkit);publishedToolkitRequested=[bool]$PublishedToolkit;cases=$results}
     [IO.File]::WriteAllText((Join-Path $work 'results.json'),($report | ConvertTo-Json -Depth 12))
     Write-Output "Release packaging: $($report.passed)/$($report.discovered) passed; results $work/results.json"
 }

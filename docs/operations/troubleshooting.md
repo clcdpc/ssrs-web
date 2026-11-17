@@ -2,6 +2,12 @@
 
 [Back to operations](README.md)
 
+## Build-time deployment toolkit
+
+The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.4` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded bytes disagree with the independent archive pin; `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with its lock. Source/version disagreement is rejected by the authenticated distribution verifier. Do not bypass these checks or substitute a legacy module name. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` now indicates an old-format or missing descriptor, including the historical beta.3 PowerShell archive; beta.4 publication is no longer outstanding.
+
+Repeat Windows packaging with actual CLC Release publish output and `scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory <publish> -PublishedToolkit`. The upstream beta.4 GitHub Release reports `immutable=false`, but its exact asset digest is pinned. Successful acquisition/packaging does not establish host runtime installation or activation, enrollment, approved baseline, standing authorization or live DEV/Production acceptance. Those target-local operations require separate authority; the beta.3 ASP.NET Core companion is a separate dependency.
+
 ## Persistent file logging
 
 `Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. Each caller-owned logging instance stays alive through host shutdown and disposal; concurrent test hosts cannot reconfigure or stop each other. ssrs-web owns `SafeLogLayout`, its output-boundary sanitizer, and explicitly removes default providers so normal events have one sanitized NLog path. Unrelated providers would need their own output policy. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
