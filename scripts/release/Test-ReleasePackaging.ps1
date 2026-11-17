@@ -207,6 +207,40 @@ try {
         Assert-Fails { & "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $unprovisionedPath -Destination (Join-Path $work 'absent-builder') } 'Release.Prerequisite.IndependentToolkitDistributionPinRequired'
         Assert-True (-not [IO.Path]::Exists((Join-Path $work 'absent-builder')))
     }
+    Test-Case 'CI raw checkout preparation preserves exact bytes and clean Git state after CRLF checkout' {
+        $fixture=Join-Path $work 'crlf-checkout-fixture'; [void][IO.Directory]::CreateDirectory($fixture)
+        $readme=Join-Path $fixture 'README.md'
+        [IO.File]::WriteAllText($readme,"reviewed LF bytes`n",[Text.UTF8Encoding]::new($false))
+        $null=Invoke-FixtureGit $fixture @('init','-q','-b','master')
+        foreach ($setting in @(@('core.autocrlf','false'),@('core.eol','lf'),@('user.name','Checkout Fixture'),@('user.email','checkout@example.invalid'))) {
+            $null=Invoke-FixtureGit $fixture @('config','--local',$setting[0],$setting[1])
+        }
+        $null=Invoke-FixtureGit $fixture @('add','--','README.md')
+        $null=Invoke-FixtureGit $fixture @('commit','-q','-m','reviewed source')
+        $commit=Invoke-FixtureGitText $fixture @('rev-parse','HEAD')
+        $null=Invoke-FixtureGit $fixture @('config','--local','core.autocrlf','true')
+        [IO.File]::Delete($readme)
+        $null=Invoke-FixtureGit $fixture @('checkout','--force','--detach',$commit)
+        Assert-True ([IO.File]::ReadAllText($readme).Contains("`r`n"))
+        Assert-True (-not (Invoke-FixtureGitText $fixture @('status','--porcelain=v1','--untracked-files=normal')))
+        # Reproduce the previous CI preparation: raw bytes pass, but subsequent
+        # ordinary Git status still sees the checkout under its persistent policy.
+        $null=Invoke-FixtureGit $fixture @('-c','core.autocrlf=false','checkout-index','--all','--force')
+        $null=Assert-ExactSourceBytes -RepositoryRoot $fixture -Commit $commit
+        Assert-True ([bool](Invoke-FixtureGitText $fixture @('status','--porcelain=v1','--untracked-files=normal')))
+        $workflow=[IO.File]::ReadAllText((Join-Path $repositoryRoot '.github/workflows/verify.yml'))
+        $match=[regex]::Match($workflow,'(?ms)^      - name: Prepare raw pinned toolkit checkout\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<body>.*?)(?=^      - name:)')
+        Assert-True $match.Success
+        $body=[regex]::Replace($match.Groups['body'].Value,'(?m)^ {10}','')
+        $body=$body.Replace('artifacts/toolkit-source','$fixture').Replace('33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d','$commit')
+        $null=& ([scriptblock]::Create($body))
+        Assert-True ((Invoke-FixtureGitText $fixture @('config','--local','--get','core.autocrlf')) -ceq 'false')
+        Assert-True ((Invoke-FixtureGitText $fixture @('rev-parse','HEAD')) -ceq $commit)
+        Assert-True (-not (Invoke-FixtureGitText $fixture @('status','--porcelain=v1','--untracked-files=normal')))
+        $null=Assert-ExactSourceBytes -RepositoryRoot $fixture -Commit $commit
+        [IO.File]::AppendAllText($readme,"unreviewed change`n",[Text.UTF8Encoding]::new($false))
+        Assert-Fails { Assert-ExactSourceBytes -RepositoryRoot $fixture -Commit $commit } 'ExactSource.WorkingTreeBlobMismatch'
+    }
     Test-Case 'Wrong whole-archive pin cannot execute its bundled self-verifier' {
         $sentinel=Join-Path $work 'must-not-exist.txt'; $evil=Join-Path $work 'untrusted.zip'
         New-TestZip $evil @{'tools/Test-ToolkitDistribution.ps1'="[IO.File]::WriteAllText('$sentinel','executed')"}

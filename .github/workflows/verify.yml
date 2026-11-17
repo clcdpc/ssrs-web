@@ -81,11 +81,20 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.303
-      - name: Authenticate the test PowerShell and preserve raw reviewed toolkit bytes
+      - name: Authenticate the test PowerShell
         shell: pwsh
         run: |
           ./scripts/release/Get-BuildPowerShell.ps1 -Destination "$env:RUNNER_TEMP/ssrs-per-target-pwsh"
-          git -C artifacts/toolkit-source -c core.autocrlf=false checkout-index --all --force
+      - name: Prepare raw pinned toolkit checkout
+        shell: pwsh
+        run: |
+          git -C artifacts/toolkit-source config --local core.autocrlf false
+          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutConfigurationFailed' }
+          git -C artifacts/toolkit-source config --local core.eol lf
+          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutConfigurationFailed' }
+          # Rebuild the owned checkout and its index state under the same settings
+          # used by later Git status calls; a one-command override is insufficient.
+          git -C artifacts/toolkit-source checkout --force --detach 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d
           if ($LASTEXITCODE) { throw 'Integration.RawCheckoutFailed' }
       - name: Qualify candidate packaging and actual application lifecycle with synthetic IIS
         shell: pwsh
