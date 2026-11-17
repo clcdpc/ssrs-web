@@ -209,6 +209,8 @@ try {
 [assembly: System.Reflection.AssemblyMetadata("Clc.IdentityKind", "Release")]
 [assembly: System.Reflection.AssemblyMetadata("Clc.ReleaseId", "ssrs-web-42-1")]
 [assembly: System.Reflection.AssemblyMetadata("Clc.SourceCommit", "1111111111111111111111111111111111111111")]
+[assembly: System.Reflection.AssemblyMetadata("Clc.ReleaseTag", "v1.0.0-dev.1")]
+[assembly: System.Reflection.AssemblyMetadata("Clc.TargetId", "ssrs-web-dev")]
 public static class PublisherFixture { }
 '@
         $manifest=[Text.Encoding]::UTF8.GetBytes('{"build":{"workflowPath":".github/workflows/release.yml","job":"release","runId":42,"runAttempt":1}}')

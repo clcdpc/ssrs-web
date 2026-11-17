@@ -9,7 +9,7 @@ param(
 . "$PSScriptRoot/Release.Common.ps1"
 $lock=Read-ReleaseJson ([IO.File]::ReadAllBytes((Assert-ReleasePath $LockPath)))
 if ($lock.schemaVersion -ne 1 -or $lock.repository -cne 'clcdpc/clc-deployment' -or
-    $lock.sourceCommit -cnotmatch '^[a-f0-9]{40}$' -or $lock.version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.-]+$') { Stop-Release 'Release.ToolkitLockInvalid' }
+    $lock.sourceCommit -cnotmatch '^[a-f0-9]{40}$' -or $lock.version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$') { Stop-Release 'Release.ToolkitLockInvalid' }
 if ($lock.distributionSha256 -cnotmatch '^[a-f0-9]{64}$' -or $lock.moduleInventorySha256 -cnotmatch '^[a-f0-9]{64}$') {
     Stop-Release 'Release.Prerequisite.IndependentToolkitDistributionPinRequired'
 }
@@ -62,11 +62,13 @@ try {
     if ($stream.Length -gt 1073741824 -or [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() -cne $lock.distributionSha256) { Stop-Release 'Release.ToolkitArchivePinMismatch' }
     $stream.Position=0; $zip=[IO.Compression.ZipArchive]::new($stream,[IO.Compression.ZipArchiveMode]::Read,$true)
     if ($zip.Entries.Count -gt 20000) { Stop-Release 'Release.ToolkitArchiveBound' }
+    $descriptor=$zip.GetEntry('distribution.json')
+    if ($null -eq $descriptor -or (Read-ReleaseJson (Read-ReleaseEntry $descriptor 4194304)).formatVersion -ne 3) { Stop-Release 'Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired' }
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase); $total=0L
     foreach ($entry in $zip.Entries) {
         Assert-ReleaseName $entry.FullName
         if (-not $seen.Add($entry.FullName) -or $entry.ExternalAttributes -ne 0 -or
-            $entry.FullName -cnotmatch '^(CLC\.Deployment/[A-Za-z0-9_./-]+|tools/[A-Za-z0-9_./-]+|distribution\.json|source\.commit)$') { Stop-Release 'Release.ToolkitArchiveShape' }
+            $entry.FullName -cnotmatch '^(Clc\.Deployment/[A-Za-z0-9_./-]+|tools/[A-Za-z0-9_./-]+|distribution\.json|source\.commit)$') { Stop-Release 'Release.ToolkitArchiveShape' }
         $total+=$entry.Length
         if ($entry.Length -gt 268435456 -or $total -gt 1073741824) { Stop-Release 'Release.ToolkitArchiveBound' }
     }
@@ -81,11 +83,11 @@ try {
     $stream.Position=0
     $retained=[IO.FileStream]::new((Join-Path $Destination 'distribution.zip'),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try { $stream.CopyTo($retained); $retained.Flush($true) } finally { $retained.Dispose() }
-    $moduleRoot=Join-Path $Destination 'CLC.Deployment'
+    $moduleRoot=Join-Path $Destination 'Clc.Deployment'
     $checked=& (Join-Path $Destination 'tools/Test-ToolkitDistribution.ps1') -ArchivePath (Join-Path $Destination 'distribution.zip') -ExpectedSha256 $lock.distributionSha256 -ExpectedSourceCommit $lock.sourceCommit -ExpectedVersion $lock.version -InstalledModuleRoot $moduleRoot -RequireInfrastructureTools
-    # The installed toolkit uses the existing infrastructure distribution format.
-    if (-not $checked.integrityVerified -or $checked.formatVersion -ne 2 -or $checked.inventorySha256 -cne $lock.moduleInventorySha256) { Stop-Release 'Release.ToolkitInventoryPinMismatch' }
-    [pscustomobject]@{moduleManifest=(Join-Path $moduleRoot 'CLC.Deployment.psd1');version=$lock.version;sourceCommit=$lock.sourceCommit;
+    # Target-local acquisition requires the renamed format-3 distribution.
+    if (-not $checked.integrityVerified -or $checked.formatVersion -ne 3 -or $checked.inventorySha256 -cne $lock.moduleInventorySha256) { Stop-Release 'Release.ToolkitInventoryPinMismatch' }
+    [pscustomobject]@{moduleManifest=(Join-Path $moduleRoot 'Clc.Deployment.psd1');version=$lock.version;sourceCommit=$lock.sourceCommit;
         distributionSha256=$lock.distributionSha256;moduleInventorySha256=$lock.moduleInventorySha256;executionPinVerified=$true;
         hostInstallationAuthorized=$false;applicationDeploymentAuthorized=$false}
 } finally { if ($zip) { $zip.Dispose() }; $stream.Dispose() }

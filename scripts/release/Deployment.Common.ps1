@@ -35,6 +35,17 @@ namespace SsrsWorkflow {
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint GetFinalPathNameByHandleW(SafeFileHandle h,StringBuilder b,uint n,uint flags);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint GetSystemWindowsDirectoryW(StringBuilder b,uint n);
   [DllImport("shell32.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern int SHGetKnownFolderPath(ref Guid id,uint flags,IntPtr token,out IntPtr path);
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct StreamInfo { public long Size; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=296)] public string Name; }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern IntPtr FindFirstStreamW(string path,int level,out StreamInfo info,uint flags);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool FindNextStreamW(IntPtr handle,out StreamInfo info);
+  [DllImport("kernel32.dll",SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool FindClose(IntPtr handle);
+  public static void CheckStreams(string path) {
+   StreamInfo info; var h=FindFirstStreamW(path,0,out info,0);
+   if(h==new IntPtr(-1)) { if(Marshal.GetLastWin32Error()==38) return; throw new IOException(); }
+   try { do { if(info.Name!="::$DATA") throw new IOException(); } while(FindNextStreamW(h,out info));
+    if(Marshal.GetLastWin32Error()!=38) throw new IOException();
+   } finally { FindClose(h); }
+  }
   public static string ProgramData() {
    var b=new StringBuilder(32768); var n=GetSystemWindowsDirectoryW(b,(uint)b.Capacity); if(n==0 || n>=b.Capacity) throw new IOException();
    string drive=Path.GetPathRoot(b.ToString())!.TrimEnd('\\'); string inherited=Environment.GetEnvironmentVariable("SystemDrive")??"";
@@ -78,9 +89,13 @@ function Open-SsrsProtected([string] $Path,$Leases,[bool] $Directory=$false,[lon
     $drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($Path))
     if ($drive.DriveType -ne [IO.DriveType]::Fixed -or $drive.DriveFormat -cne 'NTFS') { Stop-Ssrs 'Ssrs.UnsafeBootstrapPath' }
     $cursor=[IO.Path]::GetPathRoot($Path)
+    $Leases.Add([SsrsWorkflow.Native]::Pin($cursor,$true))
+    [SsrsWorkflow.Native]::CheckStreams($cursor)
+    Assert-SsrsAcl $cursor $true
     foreach ($part in $Path.Substring(3).Split('\')) {
         $cursor=Join-Path $cursor $part; $leaf=$cursor -ceq $Path
         $handle=[SsrsWorkflow.Native]::Pin($cursor,(-not $leaf -or $Directory)); $Leases.Add($handle)
+        [SsrsWorkflow.Native]::CheckStreams($cursor)
         Assert-SsrsAcl $cursor (-not $leaf)
     }
     if ($Directory) { return }
@@ -102,7 +117,11 @@ function Get-SsrsInventoryHash($Files) {
     try { foreach ($name in $names) { $f=$lookup[$name]; $hash.AppendData([Text.Encoding]::UTF8.GetBytes($name+[char]0+([long]$f.length).ToString([Globalization.CultureInfo]::InvariantCulture)+[char]0+$f.sha256+"`n")) }; return [Convert]::ToHexString($hash.GetHashAndReset()).ToLowerInvariant() } finally { $hash.Dispose() }
 }
 function Get-SsrsProgramData { Initialize-SsrsNative; return [SsrsWorkflow.Native]::ProgramData() }
-function Assert-SsrsProgramDataEnvironment([string] $Root) { if ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData) -cne $Root) { Stop-Ssrs 'Ssrs.Prerequisite.ProgramDataEnvironment' } }
+function Assert-SsrsProgramDataEnvironment([string] $Root) {
+    $inherited=[Environment]::GetEnvironmentVariable('ProgramData')
+    if (($inherited -and -not $inherited.Equals($Root,[StringComparison]::OrdinalIgnoreCase)) -or
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData) -cne $Root) { Stop-Ssrs 'Ssrs.Prerequisite.ProgramDataEnvironment' }
+}
 function Assert-SsrsBootstrapEnvelope($Authorization,[string] $AuthorizationId) {
     if ($Authorization -isnot [Collections.IDictionary] -or $Authorization.bootstrap -isnot [Collections.IDictionary] -or
         $Authorization.hostPolicy -isnot [Collections.IDictionary] -or $Authorization.hostPolicy.activeToolkit -isnot [Collections.IDictionary]) { Stop-Ssrs 'Ssrs.IndependentHandoffInvalid' }
@@ -122,12 +141,16 @@ function Open-SsrsBootstrap([string] $AuthorizationId) {
     try {
         $programData=Get-SsrsProgramData
         Assert-SsrsProgramDataEnvironment $programData
-        $authority=Join-Path $programData 'CLC\Deployment\host-authorizations'
+        if ($script:SsrsTargetId -cnotin @('ssrs-web-dev','ssrs-web-production')) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
+        $targetRoot=Join-Path $programData ('clc-'+$script:SsrsTargetId)
+        $deploymentRoot=Join-Path $targetRoot 'Deployment'
+        $authority=Join-Path $deploymentRoot 'enrollment\authorizations'
         if (-not [IO.File]::Exists((Join-Path $authority ($AuthorizationId+'.json')))) { Stop-Ssrs 'Ssrs.Prerequisite.IndependentHostAuthorizationRequired' }
         $stream=Open-SsrsProtected (Join-Path $authority ($AuthorizationId+'.json')) $leases
         $auth=Read-SsrsJson (Read-SsrsStream $stream)
         Assert-SsrsBootstrapEnvelope $auth $AuthorizationId
-        $root=Join-Path $programData 'CLC\Deployment\Bootstrap\ssrs-web'
+        if ($auth.enrollmentRoot -cne $deploymentRoot) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
+        $root=Join-Path $deploymentRoot 'bootstrap'
         if (-not [IO.Directory]::Exists($root) -or -not [IO.File]::Exists((Join-Path $root 'distribution.zip'))) { Stop-Ssrs 'Ssrs.Prerequisite.IndependentBootstrapRequired' }
         $files=[Collections.Generic.List[object]]::new(); $queue=[Collections.Generic.Queue[string]]::new(); $queue.Enqueue($root)
         $count=0; $total=0L; $clock=[Diagnostics.Stopwatch]::StartNew()
@@ -138,11 +161,11 @@ function Open-SsrsBootstrap([string] $AuthorizationId) {
                 $relative=$path.Substring($root.Length+1).Replace('\','/')
                 $isDirectory=([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::Directory) -ne 0
                 if ($isDirectory) {
-                    if ($relative -cnotmatch '^(CLC\.Deployment|CLC\.Deployment/(Private|Public)|tools|tools/host)$') { Stop-Ssrs 'Ssrs.BootstrapInventoryMismatch' }
+                    if ($relative -cnotmatch '^(Clc\.Deployment|Clc\.Deployment/(Private|Public)|tools|tools/host)$') { Stop-Ssrs 'Ssrs.BootstrapInventoryMismatch' }
                     $queue.Enqueue($path); continue
                 }
-                if ($relative -cin @('source.commit','distribution.zip','distribution.json')) { continue }
-                if ($relative -cnotmatch '^(CLC\.Deployment/(CLC\.Deployment\.ps[dm]1|(Private|Public)/[A-Za-z0-9.-]+\.ps1)|tools/(Distribution.Common|Test-ToolkitDistribution|Expand-ToolkitDistribution)\.ps1|tools/host/(Get-ClcHostEnrollment|Initialize-ClcHostEnrollment|HostEnrollment.Common|HostEnrollment.Iis|HostEnrollment.Resources)\.ps1)$') { Stop-Ssrs 'Ssrs.BootstrapInventoryMismatch' }
+                if ($relative -cin @('source.commit','distribution.zip')) { continue }
+                if ($relative -cnotmatch '^(Clc\.Deployment/(Clc\.Deployment\.ps[dm]1|(Private|Public)/[A-Za-z0-9.-]+\.ps1)|tools/(Distribution.Common|Test-ToolkitDistribution|Expand-ToolkitDistribution)\.ps1|tools/host/(Get-ClcHostEnrollment|Initialize-ClcHostEnrollment|HostEnrollment.Common|HostEnrollment.Iis|HostEnrollment.Resources)\.ps1)$') { Stop-Ssrs 'Ssrs.BootstrapInventoryMismatch' }
                 $file=Open-SsrsProtected $path $leases $false 268435456; $total+=$file.Length
                 if ($total -gt 1073741824) { Stop-Ssrs 'Ssrs.BootstrapBound' }
                 $files.Add(@{path=$relative;length=$file.Length;sha256=(Get-SsrsStreamHash $file)})
@@ -153,7 +176,7 @@ function Open-SsrsBootstrap([string] $AuthorizationId) {
         if ([Text.Encoding]::ASCII.GetString((Read-SsrsStream $source 40)) -cne $auth.bootstrap.sourceCommit) { Stop-Ssrs 'Ssrs.BootstrapSourceMismatch' }
         $distribution=Join-Path $root 'distribution.zip'; $archive=Open-SsrsProtected $distribution $leases $false 1073741824
         if ((Get-SsrsStreamHash $archive) -cne $auth.hostPolicy.activeToolkit.distributionSha256) { Stop-Ssrs 'Ssrs.ApprovedDistributionMismatch' }
-        return @{root=$root;programData=$programData;authorization=$auth;leases=$leases;distribution=$distribution;configurationPath=(Join-Path $programData 'clc-ssrs-web\Config\deployment.json')}
+        return @{root=$root;programData=$programData;authorization=$auth;leases=$leases;distribution=$distribution;targetRoot=$targetRoot;configurationPath=(Join-Path $targetRoot 'Config\deployment.json')}
     } catch { foreach ($lease in $leases) { $lease.Dispose() }; throw }
 }
 function Test-SsrsForbiddenEnvironmentName([string] $Name) {
@@ -241,9 +264,12 @@ function Open-SsrsApplicationPreflight($Bootstrap,[string] $AuthorizationId,[boo
         $session=Open-HSession $Bootstrap.configurationPath $AuthorizationId
         $config=$session.configuration
         if ($config.applicationId -cne 'ssrs-web' -or $config.targetId -cne $script:SsrsTargetId -or $config.environmentName -cne $script:SsrsEnvironmentName -or $config.runtimeEnvironment -cne 'Production' -or
-            $config.operationalConfigPath -cne (Join-Path $Bootstrap.programData 'clc-ssrs-web\Config\application.json')) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
-        $logs=Join-Path $Bootstrap.programData 'clc-ssrs-web\Logs'; $physical=Get-HProspectivePhysicalPath $logs $session.handles
-        $others=@($config.applicationRoot,[IO.Path]::GetDirectoryName($config.operationalConfigPath),$config.dataProtectionRoot,$config.artifactInboxRoot,$config.enrollmentRoot,$Bootstrap.root,(Get-HAuthorityRoot))
+            $config.operationalConfigPath -cne (Join-Path $Bootstrap.targetRoot 'Config\application.json')) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
+        foreach ($pair in @(@('applicationRoot','Application'),@('dataProtectionRoot','Keys'),@('artifactInboxRoot','Inbox'),@('enrollmentRoot','Deployment'))) {
+            if ($config[$pair[0]] -cne (Join-Path $Bootstrap.targetRoot $pair[1])) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
+        }
+        $logs=Join-Path $Bootstrap.targetRoot 'Logs'; $physical=Get-HProspectivePhysicalPath $logs $session.handles
+        $others=@($config.applicationRoot,[IO.Path]::GetDirectoryName($config.operationalConfigPath),$config.dataProtectionRoot,$config.artifactInboxRoot,$config.enrollmentRoot,$Bootstrap.root,(Get-HAuthorityRoot $script:SsrsTargetId))
         if ($session.authorization.cutover) { $others+=$session.authorization.cutover.backupRoot }
         foreach ($path in $others) {
             $other=Get-HProspectivePhysicalPath $path $session.handles
@@ -323,7 +349,7 @@ function Open-SsrsSelection($Bootstrap,[string] $AuthorizationId,[string] $Appro
         $module=Import-Module $session.layout.manifestPath -Force -PassThru -Scope Local
         $selection=& $module {
             param($ApprovalId,$TargetId)
-            $context=Open-ClcTrustedContext
+            $context=Open-ClcTrustedContext -TargetId $TargetId
             try { $target=Read-ClcProtectedTarget $context $TargetId; $approval=Read-ClcProtectedApproval $context $ApprovalId; return @{context=$context;target=$target.record;approval=$approval.record} }
             catch { Close-ClcTrustedContext $context; throw }
         } $ApprovalId $script:SsrsTargetId

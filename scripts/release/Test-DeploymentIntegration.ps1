@@ -2,11 +2,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $ToolkitSourceRoot,
-    [Parameter(Mandatory)][string] $ReleaseArchivePath,
-    [Parameter(Mandatory)][string] $UpgradeReleaseArchivePath,
+    [string] $ReleaseArchivePath,
+    [string] $UpgradeReleaseArchivePath,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string] $ToolkitSourceCommit,
     [string] $StandingReleaseArchivePath,
-    [string] $RebuildReleaseArchivePath
+    [string] $RebuildReleaseArchivePath,
+    [switch] $BuildInputs
 )
 # Synthetic qualification only. The imported upstream module is unchanged. All
 # IIS/platform/authorization observations are test-owned; no IIS API is called.
@@ -15,8 +16,6 @@ $ErrorActionPreference='Stop'
 if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6') { throw 'This rehearsal requires Windows and PowerShell 7.6.6.' }
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $toolkit=[IO.Path]::GetFullPath($ToolkitSourceRoot)
-$archive=[IO.Path]::GetFullPath($ReleaseArchivePath)
-$upgradeArchive=[IO.Path]::GetFullPath($UpgradeReleaseArchivePath)
 $scriptHash=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedSource=$ToolkitSourceCommit
 # A clean Windows checkout can still have converted source bytes. Authenticate
@@ -24,6 +23,41 @@ $expectedSource=$ToolkitSourceCommit
 # configuration/environment and absolute executable selection, before import.
 . (Join-Path $PSScriptRoot 'ExactSourceBytes.Common.ps1')
 Assert-ExactSourceBytes -RepositoryRoot $toolkit -Commit $expectedSource
+. (Join-Path $PSScriptRoot 'Release.Common.ps1')
+if ($BuildInputs) {
+    # Test-only candidates, never written to the published lock or host policy.
+    # Runtime remains the separately pinned source version; packaging uses .2.
+    $inputs=Join-Path $repository ('artifacts/per-target-inputs/'+[Guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($inputs)
+    $candidate=Join-Path $inputs 'Clc.Deployment-0.1.0-dev.2.zip'
+    $runtimeCandidate=Join-Path $inputs 'Clc.Deployment-0.1.0-dev.1.zip'
+    $null=& (Join-Path $toolkit 'tools/New-ToolkitDistribution.ps1') -RepositoryRoot $toolkit -SourceCommit $expectedSource -ReleaseVersion '0.1.0-dev.1' -OutputPath $runtimeCandidate
+    $null=& (Join-Path $toolkit 'tools/New-ToolkitDistribution.ps1') -RepositoryRoot $toolkit -SourceCommit $expectedSource -ReleaseVersion '0.1.0-dev.2' -OutputPath $candidate
+    $identity=Read-ReleaseJson ([IO.File]::ReadAllBytes(($candidate+'.identity.json')))
+    $checked=& (Join-Path $toolkit 'tools/Test-ToolkitDistribution.ps1') -ArchivePath $candidate -ExpectedSha256 $identity.distributionSha256 -ExpectedSourceCommit $expectedSource -ExpectedVersion '0.1.0-dev.2' -RequireInfrastructureTools
+    if (-not $checked.integrityVerified -or $checked.formatVersion -ne 3) { throw 'Synthetic candidate verification failed.' }
+    $testLock=Join-Path $inputs 'candidate.lock.json'
+    @{schemaVersion=1;repository='clcdpc/clc-deployment';version='0.1.0-dev.2';sourceCommit=$expectedSource;
+        distributionSha256=$identity.distributionSha256;moduleInventorySha256=$identity.inventorySha256} | ConvertTo-Json | Set-Content -LiteralPath $testLock
+    & dotnet restore (Join-Path $repository 'src/SsrsPortal/SsrsPortal.csproj') --locked-mode --runtime win-x64 -p:ClcIdentityKind=Release
+    if ($LASTEXITCODE) { throw 'Synthetic locked restore failed.' }
+    $packages=[Collections.Generic.List[string]]::new()
+    for ($i=1;$i -le 4;$i++) {
+        $tag='v1.0.0-dev.'+[Math]::Min($i,3); $releaseId='ssrs-web-'+$i+'-1'
+        $root=Join-Path $inputs ([string]$i); [void][IO.Directory]::CreateDirectory($root)
+        $publish=Join-Path $root 'publish'; $output=Join-Path $root 'output'; [void][IO.Directory]::CreateDirectory($output)
+        & dotnet publish (Join-Path $repository 'src/SsrsPortal/SsrsPortal.csproj') -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcIdentityKind=Release "-p:ClcReleaseId=$releaseId" '-p:ClcSourceCommit=1111111111111111111111111111111111111111' "-p:ClcReleaseTag=$tag" -p:ClcTargetId=ssrs-web-dev --output $publish
+        if ($LASTEXITCODE) { throw 'Synthetic publish failed.' }
+        $null=& (Join-Path $PSScriptRoot 'Export-ThirdPartyNotices.ps1') -PublishDirectory $publish
+        $null=& (Join-Path $PSScriptRoot 'New-PortalRelease.ps1') -PublishRoot $publish -OutputDirectory $output -ToolkitLockPath $testLock -ToolkitDirectory (Join-Path $root 'toolkit') -ToolkitArchivePath $candidate -ReleaseId $releaseId -ReleaseTag $tag -SourceCommit ('1'*40) -RunId $i -RunAttempt 1 -DependencyLockSha256 (Get-ReleaseDependencyLockHash $repository) -WorkflowCommit ('1'*40)
+        $packages.Add((Join-Path $output 'release.zip'))
+        if ($i -eq 1) { & (Join-Path $PSScriptRoot 'Test-ReleasePackaging.ps1') -PublishDirectory $publish -SyntheticToolkitArchive $candidate -SyntheticToolkitLock $testLock }
+    }
+    $ReleaseArchivePath=$packages[0]; $UpgradeReleaseArchivePath=$packages[1]; $StandingReleaseArchivePath=$packages[2]; $RebuildReleaseArchivePath=$packages[3]
+}
+if (-not $ReleaseArchivePath -or -not $UpgradeReleaseArchivePath) { throw 'Explicit archives or BuildInputs are required.' }
+$archive=[IO.Path]::GetFullPath($ReleaseArchivePath)
+$upgradeArchive=[IO.Path]::GetFullPath($UpgradeReleaseArchivePath)
 $evidenceRoot=Join-Path $repository ('artifacts/deployment-integration/'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($evidenceRoot)
 $results=[Collections.Generic.List[object]]::new()
@@ -128,15 +162,40 @@ function Invoke-BridgeReadiness {
 }
 function New-BridgeFixture {
     $fixture=New-T2Fixture
+    Assert-Bridge ([IO.Path]::GetPathRoot($fixture.workspace).Equals([IO.Path]::GetPathRoot($conventionalRoot),[StringComparison]::OrdinalIgnoreCase)) 'fixture workspace is on the owned canonical target volume'
     $oldTarget=Join-Path $fixture.layout.targetCatalogRoot ($fixture.target.targetId+'.json')
     [IO.File]::Delete($oldTarget)
+    $priorRoot=$fixture.layout.targetRoot
+    [IO.Directory]::Move($fixture.layout.deploymentRoot,(Join-Path $conventionalRoot 'Deployment'))
+    foreach ($key in @($fixture.layout.Keys)) {
+        if ($fixture.layout[$key] -is [string] -and $fixture.layout[$key].StartsWith($priorRoot,[StringComparison]::Ordinal)) {
+            $fixture.layout[$key]=$conventionalRoot+$fixture.layout[$key].Substring($priorRoot.Length)
+        }
+    }
+    $fixture.layout.targetId='ssrs-web-dev'
     $fixture.target.targetId='ssrs-web-dev'; $fixture.target.applicationId='ssrs-web'; $fixture.target.environmentName='DEV'
+    $fixture.target.applicationRoot=Join-Path $conventionalRoot 'Application'; $fixture.target.artifactInboxRoot=Join-Path $conventionalRoot 'Inbox'
+    foreach ($path in @($fixture.target.applicationRoot,$fixture.target.artifactInboxRoot)) { [void][IO.Directory]::CreateDirectory($path) }
+    $fixture.iis.applications[0].physicalPath=$fixture.target.applicationRoot
     $fixture.target.operationalConfigPath=Join-Path $conventionalRoot 'Config/application.json'; $fixture.target.dataProtectionRoot=Join-Path $conventionalRoot 'Keys'
     # Keep the complete real notice/license inventory inside the toolkit's 240
     # character path budget, including staging and backup paths. This state is
     # a sibling of the long upstream workspace, inside our exclusively owned root.
-    $fixture.layout.controlStateRoot=Join-Path $shortRoot 'c'
-    $fixture.policy.controlStateRoot=$fixture.layout.controlStateRoot
+    foreach ($key in @('targetCatalogRoot','approvalCatalogRoot','controlStateRoot','lockRoot')) { $fixture.policy[$key]=$fixture.layout[$key] }
+    $fixture.policy.activeToolkit.moduleManifestPath=$fixture.layout.manifestPath
+    $runtimeArchive=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($archive)))) 'Clc.Deployment-0.1.0-dev.1.zip'
+    if ([IO.File]::Exists($runtimeArchive)) {
+        $runtimePin=Read-ReleaseJson ([IO.File]::ReadAllBytes(($runtimeArchive+'.identity.json')))
+        $runtimeLock=Join-Path $fixture.workspace 'runtime.lock.json'
+        Write-TestJson $runtimeLock @{schemaVersion=1;repository='clcdpc/clc-deployment';version='0.1.0-dev.1';sourceCommit=$expectedSource;distributionSha256=$runtimePin.distributionSha256;moduleInventorySha256=$runtimePin.inventorySha256}
+        $runtimeCache=Join-Path $fixture.workspace 'runtime-cache'
+        $null=& (Join-Path $PSScriptRoot 'Get-ReleaseToolkit.ps1') -LockPath $runtimeLock -Destination $runtimeCache -ArchivePath $runtimeArchive
+        Copy-Item -LiteralPath (Join-Path $runtimeCache 'tools') -Destination $fixture.layout.versionRoot -Recurse
+        $null=& (Join-Path $toolkit 'tools/Test-ToolkitDistribution.ps1') -ArchivePath $runtimeArchive -ExpectedSha256 $runtimePin.distributionSha256 -ExpectedSourceCommit $expectedSource -ExpectedVersion '0.1.0-dev.1' -InstalledModuleRoot $fixture.layout.moduleRoot -RequireInfrastructureTools
+        [IO.File]::Copy($runtimeArchive,$fixture.layout.distributionPath,$true)
+        [IO.File]::WriteAllText($fixture.layout.sourcePath,$expectedSource,[Text.UTF8Encoding]::new($false))
+        $fixture.policy.activeToolkit.sourceCommit=$expectedSource; $fixture.policy.activeToolkit.distributionSha256=$runtimePin.distributionSha256
+    }
     $fixture.controlRoot=Join-Path $fixture.layout.controlStateRoot $fixture.targetKey
     [void][IO.Directory]::CreateDirectory($fixture.controlRoot)
     $fixture.policy.dotnetPath=$global:SsrsBridge.dotnet
@@ -164,10 +223,16 @@ function Save-BridgeProcessLogs([string] $Destination) {
 function Set-BridgeModuleAdapters($Module) {
     $global:SsrsBridge.replace= & $Module { (Get-Command Invoke-ClcManagedReplacement).ScriptBlock }
     $global:SsrsBridge.backup= & $Module { (Get-Command New-ClcVerifiedBackup).ScriptBlock }
+    $global:SsrsBridge.pathSpelling= & $Module { (Get-Command Assert-ClcPathSpelling).ScriptBlock }
     & $Module {
+        function script:Assert-ClcPathSpelling {
+            param([string] $Path,[switch] $Temporary)
+            try { & $global:SsrsBridge.pathSpelling $Path -Temporary:$Temporary }
+            catch { $global:SsrsBridge.rejectedPath=$Path; throw }
+        }
         # Only test-owned observations are replaced. The actual validator native
         # launcher, NTFS/lock/ZIP/approval/state/lifecycle/recovery engine stays.
-        function script:Get-ClcInstalledLayout { return $global:ClcTestFixture.layout }
+        function script:Get-ClcInstalledLayout { param([string] $TargetId) if ($TargetId -cne $global:ClcTestFixture.target.targetId) { Stop-ClcError Clc.ToolkitNotActive }; return $global:ClcTestFixture.layout }
         function script:Get-ClcCallerSid { return 'S-1-5-19' }
         function script:Test-ClcAdministratorToken { return $true }
         function script:Assert-ClcRuntimeIdentity { param($Context,$RuntimeSid) }
@@ -217,17 +282,18 @@ foreach ($name in @('Assert-Bridge','Start-BridgeProgram','Stop-BridgeProgram','
     Set-Item -Path ('Function:global:'+$name) -Value (Get-Command $name).ScriptBlock
 }
 $fixture=$null; $ownedConventional=$false; $shortRoot=$null; $markerName=''; $conventionalRoot=''; $programDataLease=$null; $previousTemp=$env:TEMP; $previousTmp=$env:TMP
-$global:SsrsBridge=@{process=$null;dotnet=(Get-Command dotnet -CommandType Application).Source;httpCalls=0L;successfulHttp=0L;readinessCalls=0L;failReadiness=$false;forcedHttpFailureObserved=$false;operations=[Collections.Generic.List[string]]::new();replacements=[Collections.Generic.List[object]]::new();backups=[Collections.Generic.List[object]]::new()}
+$global:SsrsBridge=@{process=$null;rejectedPath=$null;dotnet=(Get-Command dotnet -CommandType Application).Source;httpCalls=0L;successfulHttp=0L;readinessCalls=0L;failReadiness=$false;forcedHttpFailureObserved=$false;operations=[Collections.Generic.List[string]]::new();replacements=[Collections.Generic.List[object]]::new();backups=[Collections.Generic.List[object]]::new()}
 $httpHandler=[Net.Http.HttpClientHandler]::new(); $httpHandler.AllowAutoRedirect=$false; $httpHandler.UseCookies=$false
 $global:SsrsBridge.client=[Net.Http.HttpClient]::new($httpHandler); $global:SsrsBridge.client.Timeout=[TimeSpan]::FromSeconds(2)
 try {
     # Reuse the actual shared OS resolver, without invoking its privileged entry
     # point or trusting caller-controlled ProgramData environment variables.
+    . (Join-Path $repository 'scripts/release/Release.Common.ps1')
     . (Join-Path $repository 'scripts/release/Deployment.Common.ps1')
     Initialize-SsrsNative
     $programData=[SsrsWorkflow.Native]::ProgramData()
     $programDataLease=[SsrsWorkflow.Native]::Pin($programData,$true)
-    $conventionalRoot=Join-Path $programData 'clc-ssrs-web'
+    $conventionalRoot=Join-Path $programData 'clc-ssrs-web-dev'
     # Directory.Move is same-volume create-new: an existing operational root is
     # never opened, enumerated, changed or cleaned by this rehearsal.
     $sibling=Join-Path $programData ('ssrs-bridge-'+[Guid]::NewGuid().ToString('N'))
@@ -237,14 +303,21 @@ try {
     $markerName='synthetic-bridge-owner-'+[Guid]::NewGuid().ToString('N')+'.txt'
     [IO.File]::WriteAllText((Join-Path $conventionalRoot $markerName),'synthetic-unapproved-qualification')
     foreach ($name in @('Config','Keys')) { [void][IO.Directory]::CreateDirectory((Join-Path $conventionalRoot $name)) }
-    # Short, exclusively owned Temp avoids the unchanged toolkit path budgets.
-    $shortRoot=Join-Path ([IO.Path]::GetPathRoot($repository)) ('ssrs-b-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
+    # Keep auxiliary bootstrap observations in an exclusively owned runner folder.
+    $temporaryParent=if ($env:RUNNER_TEMP) {$env:RUNNER_TEMP} else {[IO.Path]::GetTempPath()}
+    $shortRoot=Join-Path $temporaryParent ('ssrs-b-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
     if ([IO.Directory]::Exists($shortRoot) -or [IO.File]::Exists($shortRoot)) { throw 'Short synthetic root collision.' }
     [void][IO.Directory]::CreateDirectory($shortRoot)
     $acl=Get-Acl -LiteralPath $shortRoot
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
     Set-Acl -LiteralPath $shortRoot -AclObject $acl
-    $env:TEMP=$shortRoot; $env:TMP=$shortRoot
+    # New-T2Fixture must start on the canonical target volume. Hosted Windows
+    # runners may place RUNNER_TEMP on D: while native ProgramData remains on C:.
+    # The conventional root above is exclusively create-new and marker-owned.
+    # SSRS-BRIDGE-TEMP-BEGIN
+    $env:TEMP=$conventionalRoot; $env:TMP=$conventionalRoot
+    # SSRS-BRIDGE-TEMP-END
+    Remove-Module Clc.Deployment -Force -ErrorAction SilentlyContinue
     . (Join-Path $toolkit 'tests/Support.ps1')
     . (Join-Path $toolkit 'tests/T2Support.ps1')
     . (Join-Path $toolkit 'tests/T3Support.ps1')
@@ -259,8 +332,49 @@ try {
     $fixture=New-BridgeFixture; Set-T2FixtureInModule $fixture
     $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $listener.Start()
     $global:SsrsBridge.address='http://127.0.0.1:'+([Net.IPEndPoint]$listener.LocalEndpoint).Port; $listener.Stop()
-    $module=Get-Module CLC.Deployment
+    $module=Get-Module Clc.Deployment
     Set-BridgeModuleAdapters $module
+    if ($BuildInputs) {
+        Test-BridgeCase 'Actual format-3 candidates authenticate independent DEV and Production bootstraps before first execution' {
+            $script:bridgeProgramData=Join-Path $shortRoot 'p'
+            function Get-SsrsProgramData { return $script:bridgeProgramData }
+            function Assert-SsrsProgramDataEnvironment([string] $Root) {}
+            function Assert-SsrsAcl([string] $Path,[bool] $Ancestor) {}
+            $bootstrapRecords=@{}
+            try {
+                foreach ($pair in @(@('ssrs-web-dev',$runtimeCandidate),@('ssrs-web-production',$candidate))) {
+                    $id=$pair[0]; $zipPath=$pair[1]; $pin=Read-ReleaseJson ([IO.File]::ReadAllBytes(($zipPath+'.identity.json')))
+                    $deployment=Join-Path $script:bridgeProgramData ('clc-'+$id+'\Deployment')
+                    $authorizationRoot=Join-Path $deployment 'enrollment\authorizations'; [void][IO.Directory]::CreateDirectory($authorizationRoot)
+                    $lockPath=Join-Path $inputs ($id+'.lock.json')
+                    @{schemaVersion=1;repository='clcdpc/clc-deployment';version=$pin.moduleVersion;sourceCommit=$expectedSource;distributionSha256=$pin.distributionSha256;moduleInventorySha256=$pin.inventorySha256} | ConvertTo-Json | Set-Content -LiteralPath $lockPath
+                    $cache=Join-Path $inputs ($id+'-cache')
+                    $acquired=& (Join-Path $PSScriptRoot 'Get-ReleaseToolkit.ps1') -LockPath $lockPath -Destination $cache -ArchivePath $zipPath
+                    $bootstrapRoot=Join-Path $deployment 'bootstrap'; [void][IO.Directory]::CreateDirectory($bootstrapRoot)
+                    foreach ($name in @('Clc.Deployment','tools','source.commit','distribution.zip')) { Copy-Item -LiteralPath (Join-Path $cache $name) -Destination $bootstrapRoot -Recurse }
+                    $files=@(Get-ChildItem -LiteralPath $bootstrapRoot -File -Recurse | Where-Object Name -CNotIn @('source.commit','distribution.zip') | ForEach-Object {
+                        @{path=$_.FullName.Substring($bootstrapRoot.Length+1).Replace('\','/');length=$_.Length;sha256=(Get-ReleaseHash $_.FullName)}
+                    })
+                    $auth=@{contractFamily='clc-host-enrollment-v1';recordKind='host-enrollment-authorization';schemaVersion=1L;authorizationId=$id;targetId=$id;enrollmentRoot=$deployment;
+                        bootstrap=@{sourceCommit=$expectedSource;inventorySha256=(Get-SsrsInventoryHash $files)};hostPolicy=@{activeToolkit=@{distributionSha256=$pin.distributionSha256}}}
+                    Write-TestJson (Join-Path $authorizationRoot ($id+'.json')) $auth
+                    $script:SsrsTargetId=$id
+                    $opened=Open-SsrsBootstrap $id
+                    try { Assert-Bridge ($opened.root -ceq $bootstrapRoot -and $opened.configurationPath -ceq (Join-Path ([IO.Path]::GetDirectoryName($deployment)) 'Config\deployment.json')) 'canonical target bootstrap/config selection' }
+                    finally { foreach ($lease in $opened.leases) { $lease.Dispose() } }
+                    $bootstrapRecords[$id]=@{version=$acquired.version;root=$bootstrapRoot;deployment=$deployment;authorization=$auth}
+                }
+                Assert-Bridge ($bootstrapRecords['ssrs-web-dev'].version -cne $bootstrapRecords['ssrs-web-production'].version) 'independent candidate versions'
+                $productionBefore=Get-BridgeInventory $bootstrapRecords['ssrs-web-production'].deployment
+                $script:SsrsTargetId='ssrs-web-dev'
+                $substitution=Join-Path $bootstrapRecords['ssrs-web-dev'].deployment 'enrollment\authorizations\ssrs-web-dev.json'
+                Write-TestJson $substitution $bootstrapRecords['ssrs-web-production'].authorization
+                $rejected=$false; try { $null=Open-SsrsBootstrap 'ssrs-web-dev' } catch { $rejected=$_.Exception.Message -ceq 'Ssrs.IndependentHandoffInvalid' }
+                Assert-Bridge $rejected 'cross-target independent authorization substitution rejected'
+                Assert-Bridge ((Get-BridgeInventory $bootstrapRecords['ssrs-web-production'].deployment) -ceq $productionBefore) 'DEV changes leave Production bytes untouched'
+            } finally { $script:SsrsTargetId='ssrs-web-dev' }
+        }
+    }
     $integrity=Test-ClcRelease $archive
     Assert-Bridge ($integrity.integrityVerified -and -not $integrity.authorizedForDeployment) 'actual package integrity only'
     $manifestBytes=(Get-TestZipEntries $archive | Where-Object name -CEQ 'manifest.json').bytes
@@ -421,7 +535,7 @@ try {
             foreach ($file in $firstApprovals) { Assert-Bridge ((Get-FileHash $file.path).Hash -ceq $file.hash) 'original exact approvals retained' }
             Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $auto $adapterContext } 'Clc.ReleaseIdentityConflict'
             $lower=$rebuilt | ConvertTo-Json -Depth 12 | ConvertFrom-Json -AsHashtable; $lower.tag='v1.0.0-dev.2'
-            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $lower $adapterContext } 'Clc.DowngradeRejected'
+            Assert-BridgeRejection { Invoke-SsrsToolkitAutomaticDeployment $lower $adapterContext } 'Release.CompiledTargetMismatch'
         }
         Test-BridgeCase 'Revocation blocks an already admitted rebuild retry and preserves actual application state' {
             $before=Get-BridgeLiveSnapshot $fixture; $standing.enabled=$false; Write-TestJson $standingPath $standing
@@ -437,7 +551,7 @@ try {
         ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'results.json') -Encoding utf8NoBOM
     Write-Host ('Deployment integration: '+$results.Count+'/'+$results.Count+' passed; '+(Join-Path $evidenceRoot 'results.json'))
 } catch {
-    [ordered]@{classification='failed-synthetic-qualification';passed=$results.Count;error=$_.Exception.Message;stack=$_.ScriptStackTrace;realHostQualified=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'failure.json') -Encoding utf8NoBOM
+    [ordered]@{classification='failed-synthetic-qualification';passed=$results.Count;error=$_.Exception.Message;stack=$_.ScriptStackTrace;pathRejection=$global:SsrsBridge.rejectedPath;realHostQualified=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'failure.json') -Encoding utf8NoBOM
     if ($fixture -and [IO.Directory]::Exists($fixture.controlRoot)) {
         foreach ($name in @('journal.json','current.json')) { $path=Join-Path $fixture.controlRoot $name; if ([IO.File]::Exists($path)) { Copy-Item -LiteralPath $path -Destination (Join-Path $evidenceRoot ('synthetic-'+$name)) } }
     }
@@ -452,17 +566,13 @@ try {
             if ($fixture -and $null -eq $global:SsrsBridge.process) {
                 Save-BridgeEvidence $fixture (Join-Path $evidenceRoot 'final-control')
                 Remove-TestWorkspace $fixture.workspace
-                $ownedState=[IO.Path]::GetFullPath((Join-Path $shortRoot 'c'))
-                $ownedPrefix=[IO.Path]::GetFullPath($shortRoot).TrimEnd('\')+'\'
-                if (-not $ownedState.StartsWith($ownedPrefix,[StringComparison]::OrdinalIgnoreCase) -or $ownedState -cne $fixture.layout.controlStateRoot) { throw 'Unsafe synthetic state cleanup.' }
-                if ([IO.Directory]::Exists($ownedState)) { Remove-Item -LiteralPath $ownedState -Recurse -Force }
             }
         } finally {
             $env:TEMP=$previousTemp; $env:TMP=$previousTmp
             try {
                 if ($shortRoot -and [IO.Directory]::Exists($shortRoot) -and [IO.Directory]::GetFileSystemEntries($shortRoot).Length -eq 0) { [IO.Directory]::Delete($shortRoot) }
                 if ($ownedConventional -and $null -eq $global:SsrsBridge.process) {
-                    if ([IO.Path]::GetFullPath($conventionalRoot) -cne (Join-Path $programData 'clc-ssrs-web') -or -not [IO.File]::Exists((Join-Path $conventionalRoot $markerName))) { throw 'Synthetic conventional cleanup ownership lost.' }
+                    if ([IO.Path]::GetFullPath($conventionalRoot) -cne (Join-Path $programData 'clc-ssrs-web-dev') -or -not [IO.File]::Exists((Join-Path $conventionalRoot $markerName))) { throw 'Synthetic conventional cleanup ownership lost.' }
                     foreach ($entry in @(Get-Item -LiteralPath $conventionalRoot)+@(Get-ChildItem -LiteralPath $conventionalRoot -Recurse -Force)) {
                         if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Synthetic conventional cleanup refuses reparse point.' }
                     }

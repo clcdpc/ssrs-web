@@ -397,7 +397,7 @@ jobs:
                   $workflow=@($tree.tree | Where-Object path -CEQ '.github/workflows/release.yml')
                   if ($workflow.Count -ne 1 -or $workflow[0].type -cne 'blob' -or $workflow[0].mode -cnotin @('100644','100755')) { throw 'Ssrs.TaggedWorkflowRequired' }
               } finally { $response.Dispose() }
-              foreach ($name in @('ReleaseArchive.Common.ps1','TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
+              foreach ($name in @('Release.Common.ps1','ReleaseArchive.Common.ps1','TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
                   $path='scripts/release/'+$name
                   $expected=@($tree.tree | Where-Object path -CEQ $path)
                   if ($expected.Count -ne 1 -or $expected[0].type -cne 'blob' -or $expected[0].mode -cnotin @('100644','100755')) { throw 'Ssrs.TaggedScriptRequired' }

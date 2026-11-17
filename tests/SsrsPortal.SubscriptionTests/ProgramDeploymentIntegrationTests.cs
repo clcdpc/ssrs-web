@@ -27,7 +27,75 @@ public sealed class ProgramDeploymentIntegrationTests
     private const string SyntheticReleaseSourceCommit = "1111111111111111111111111111111111111111";
 
     [TestMethod]
-    public async Task PublishedReleaseEntryPointValidatesAndServesAnonymousConventionalReadiness()
+    [DataRow("v1.0.0-dev.1", "ssrs-web-dev", "clc-ssrs-web-dev")]
+    [DataRow("v1.0.0", "ssrs-web-production", "clc-ssrs-web-production")]
+    public void CompiledReleaseSelectsOnlyItsTagBoundDirectory(string tag, string target, string expected)
+    {
+        Assert.AreEqual(expected, ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", "test-release", SyntheticReleaseSourceCommit, "Release", tag, target)));
+        Assert.AreEqual("clc-ssrs-web", Program.ApplicationDirectoryName);
+        Assert.AreEqual("clc-ssrs-web", PersistentKeyOptions.ApplicationName);
+        Assert.AreEqual("ssrs-web-dpapi-user-v1", PersistentKeyOptions.CompatibilityId);
+    }
+
+    [TestMethod]
+    [DataRow("", "ssrs-web-dev")]
+    [DataRow("v1.0.0-dev.1", "")]
+    [DataRow("v1.0.0-dev.1", "ssrs-web-production")]
+    [DataRow("v1.0.0", "ssrs-web-dev")]
+    [DataRow("v1.0.0-beta.1", "")]
+    [DataRow("v1.0.0-rc.1", "")]
+    [DataRow("v1.0.0-dev.9999", "ssrs-web-dev")]
+    public void InvalidOrArtifactOnlyReleaseCannotSelectAnApplicationDirectory(string tag, string target)
+    {
+        Assert.ThrowsExactly<InvalidOperationException>(() => ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", "test-release", SyntheticReleaseSourceCommit, "Release", tag, target)));
+    }
+
+    [TestMethod]
+    [DataRow("", "ssrs-web-dev", "Release requires an exact supported ClcReleaseTag")]
+    [DataRow("v1.0.0-dev.1", "", "ClcTargetId must match")]
+    [DataRow("v1.0.0-dev.1", "ssrs-web-production", "ClcTargetId must match")]
+    [DataRow("v1.0.0", "ssrs-web-dev", "ClcTargetId must match")]
+    [DataRow("v1.0.0-beta.1", "ssrs-web-dev", "ClcTargetId must match")]
+    [DataRow("v1.0.0-dev.9999", "ssrs-web-dev", "Release requires an exact supported ClcReleaseTag")]
+    public async Task ActualReleaseBuildRejectsMissingInvalidOrOverriddenTarget(string tag, string target, string diagnostic)
+    {
+        var repository = RepositoryRoot();
+        var artifacts = Path.Combine(repository, "artifacts", "invalid-release-binding-" + Guid.NewGuid().ToString("N"));
+        var result = await RunProcess("dotnet", repository,
+            ["build", Path.Combine(repository, "src", "SsrsPortal", "SsrsPortal.csproj"), "-c", "Release", "--artifacts-path", artifacts,
+                "-p:ClcIdentityKind=Release", "-p:ClcReleaseId=ssrs-web-negative-test", "-p:ClcSourceCommit=" + SyntheticReleaseSourceCommit,
+                "-p:ClcReleaseTag=" + tag, "-p:ClcTargetId=" + target],
+            timeout: TimeSpan.FromMinutes(2), preserveEnvironment: true);
+        Assert.AreNotEqual(0, result.ExitCode);
+        StringAssert.Contains(result.StandardOutput + result.StandardError, diagnostic);
+    }
+
+    [TestMethod]
+    [DataRow("v1.0.0-beta.1")]
+    [DataRow("v1.0.0-rc.1")]
+    public async Task ActualArtifactOnlyReleaseCannotDiscoverValidateOrStart(string tag)
+    {
+        var repository = RepositoryRoot();
+        var artifacts = Path.Combine(repository, "artifacts", "artifact-only-release-" + Guid.NewGuid().ToString("N"));
+        var publish = Path.Combine(artifacts, "publish");
+        var result = await RunProcess("dotnet", repository,
+            ["publish", Path.Combine(repository, "src", "SsrsPortal", "SsrsPortal.csproj"), "-c", "Release", "--artifacts-path", Path.Combine(artifacts, "build"),
+                "--output", publish, "-p:ClcIdentityKind=Release", "-p:ClcReleaseId=ssrs-web-artifact-test", "-p:ClcSourceCommit=" + SyntheticReleaseSourceCommit,
+                "-p:ClcReleaseTag=" + tag, "-p:ClcTargetId="],
+            timeout: TimeSpan.FromMinutes(2), preserveEnvironment: true);
+        Assert.AreEqual(0, result.ExitCode, result.StandardOutput + result.StandardError);
+        foreach (var arguments in new[] { new[] { "--clc-appdata-directory" }, new[] { "--validate-deployment", "--environment", "Production" }, new[] { "--environment", "Production", "--urls", "http://127.0.0.1:1" } })
+        {
+            var rejected = await RunPublishedArguments(publish, arguments);
+            Assert.AreNotEqual(0, rejected.ExitCode, tag + " must remain artifact-only.");
+            Assert.IsFalse(rejected.StandardOutput.Contains("clc-ssrs-web", StringComparison.Ordinal));
+        }
+    }
+
+    [TestMethod]
+    [DataRow("v1.0.0-dev.1", "ssrs-web-dev")]
+    [DataRow("v1.0.0", "ssrs-web-production")]
+    public async Task PublishedReleaseEntryPointValidatesAndServesAnonymousConventionalReadiness(string releaseTag, string targetId)
     {
         if (!OperatingSystem.IsWindows()) { Assert.Inconclusive("The actual Program acceptance test requires Windows DPAPI and a Windows Kestrel host."); }
 
@@ -41,7 +109,7 @@ public sealed class ProgramDeploymentIntegrationTests
         var publishResult = await RunProcess("dotnet", repository,
             ["publish", Path.Combine(repository, "src", "SsrsPortal", "SsrsPortal.csproj"), "--configuration", "Release",
                 "--artifacts-path", Path.Combine(artifacts, "build"), "--output", publish,
-                "-p:ClcIdentityKind=Release", "-p:ClcReleaseId=" + syntheticIdentity.ReleaseId,
+                "-p:ClcIdentityKind=Release", "-p:ClcReleaseTag=" + releaseTag, "-p:ClcTargetId=" + targetId, "-p:ClcReleaseId=" + syntheticIdentity.ReleaseId,
                 "-p:ClcSourceCommit=" + syntheticIdentity.SourceCommit],
             timeout: TimeSpan.FromMinutes(2), preserveEnvironment: true);
         Assert.AreEqual(0, publishResult.ExitCode, publishResult.StandardOutput + publishResult.StandardError);
@@ -57,12 +125,19 @@ public sealed class ProgramDeploymentIntegrationTests
         Assert.AreEqual("Release", publishedIdentity.Kind);
         Assert.IsTrue(publishedIdentity.IsRelease);
 
+        var forbiddenOverride = Path.Combine(artifacts, "override", "application.json");
+        var developmentOverride = await RunPublishedArguments(publish,
+            ["--environment", "Development", "--SsrsPortal:TestConfigurationFile", forbiddenOverride]);
+        Assert.AreNotEqual(0, developmentOverride.ExitCode);
+        StringAssert.Contains(developmentOverride.StandardError, "Release startup requires Production or Staging.");
+        Assert.IsFalse(Directory.Exists(Path.GetDirectoryName(forbiddenOverride)), "Released bytes must reject Development path overrides before configuration or logging.");
+
         var programData = ProgramDataPath.Root;
         Assert.IsTrue(Path.IsPathFullyQualified(programData), "CommonApplicationData must resolve to a fully qualified Windows path.");
         Assert.AreEqual(programData, InToolkitMinimalEnvironment(() => ProgramDataPath.Root),
             "The OS-known ProgramData path must stay identical when toolkit-only environment variables are absent.");
         LocalFileSystemPolicy.RequireLocalPhysicalPath(programData, "Synthetic ProgramData test parent");
-        var conventionalRoot = Path.Combine(programData, "clc-ssrs-web");
+        var conventionalRoot = Path.Combine(programData, "clc-" + targetId);
         var stagingRoot = "";
         var ownsStaging = false;
         var ownsRoot = false;
@@ -194,7 +269,8 @@ public sealed class ProgramDeploymentIntegrationTests
 
             var spoofedProgramData = Path.Combine(artifacts, "spoofed-programdata");
             var spoofedPathValidation = await RunValidator(publish, configPath, keyDirectory, spoofedProgramData);
-            AssertValidation(spoofedPathValidation, valid: true, releaseId, sourceCommit, "integration-001");
+            Assert.IsFalse(spoofedPathValidation.Valid);
+            CollectionAssert.Contains(spoofedPathValidation.ErrorCodes, "InvalidDeploymentInput");
             Assert.IsFalse(Directory.Exists(spoofedProgramData), "ProgramData environment values cannot redirect the conventional path.");
             AssertInventory(emptyKeys, keyDirectory);
 
@@ -785,7 +861,7 @@ public sealed class ProgramDeploymentIntegrationTests
         return (releaseId, SyntheticReleaseSourceCommit);
     }
 
-    private static Assembly CreateIdentityAssembly(string applicationId, string releaseId, string sourceCommit, string kind)
+    private static Assembly CreateIdentityAssembly(string applicationId, string releaseId, string sourceCommit, string kind, string releaseTag = "v1.0.0-dev.1", string targetId = "ssrs-web-dev")
     {
         var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Clc.SyntheticIdentity." + Guid.NewGuid().ToString("N")), AssemblyBuilderAccess.Run);
         foreach (var pair in new[]
@@ -793,7 +869,9 @@ public sealed class ProgramDeploymentIntegrationTests
             new KeyValuePair<string, string>("Clc.ApplicationId", applicationId),
             new KeyValuePair<string, string>("Clc.ReleaseId", releaseId),
             new KeyValuePair<string, string>("Clc.SourceCommit", sourceCommit),
-            new KeyValuePair<string, string>("Clc.IdentityKind", kind)
+            new KeyValuePair<string, string>("Clc.IdentityKind", kind),
+            new KeyValuePair<string, string>("Clc.ReleaseTag", releaseTag),
+            new KeyValuePair<string, string>("Clc.TargetId", targetId)
         })
         {
             var constructor = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;

@@ -29,7 +29,12 @@ internal static class DeploymentContract
 
     private static DeploymentValidationOptions Options(Assembly applicationAssembly, Func<string> expectedConfigurationPath) =>
         new(applicationAssembly, ApplicationId, PersistentKeyOptions.CompatibilityId,
-            request => ValidateRequest(request, expectedConfigurationPath));
+            request =>
+            {
+                try { _ = ReleaseTarget.DirectoryName(applicationAssembly); }
+                catch (Exception) { throw new DeploymentValidationException(DeploymentValidationErrorCode.InvalidDeploymentInput); }
+                return ValidateRequest(request, expectedConfigurationPath);
+            });
 
     private static string ValidateRequest(DeploymentValidationRequest request, Func<string> expectedConfigurationPath)
     {

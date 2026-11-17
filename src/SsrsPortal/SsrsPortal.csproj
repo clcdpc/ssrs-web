@@ -54,6 +54,19 @@
     <AssemblyMetadata Include="Clc.ReleaseId" Value="$(ClcReleaseId)" />
     <AssemblyMetadata Include="Clc.SourceCommit" Value="$(ClcSourceCommit)" />
     <AssemblyMetadata Include="Clc.IdentityKind" Value="$(ClcIdentityKind)" />
+    <AssemblyMetadata Include="Clc.ReleaseTag" Value="$(ClcReleaseTag)" Condition="'$(ClcIdentityKind)' == 'Release'" />
+    <AssemblyMetadata Include="Clc.TargetId" Value="$(ClcTargetId)" Condition="'$(ClcIdentityKind)' == 'Release'" />
   </ItemGroup>
+
+  <Target Name="ValidateClcReleaseTarget" BeforeTargets="CoreCompile" Condition="'$(ClcIdentityKind)' == 'Release'">
+    <PropertyGroup>
+      <_ClcValidTag>$([System.Text.RegularExpressions.Regex]::IsMatch('$(ClcReleaseTag)', '\Av(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})(?:-(dev|beta|rc)\.([1-9][0-9]{0,3}))?\z'))</_ClcValidTag>
+      <_ClcDevTag>$([System.Text.RegularExpressions.Regex]::IsMatch('$(ClcReleaseTag)', '-dev\.'))</_ClcDevTag>
+      <_ClcStableTag>$([System.Text.RegularExpressions.Regex]::IsMatch('$(ClcReleaseTag)', '\Av[0-9]+\.[0-9]+\.[0-9]+\z'))</_ClcStableTag>
+      <_ClcInvalidSequence>$([System.Text.RegularExpressions.Regex]::IsMatch('$(ClcReleaseTag)', '-(dev|beta|rc)\.9999\z'))</_ClcInvalidSequence>
+    </PropertyGroup>
+    <Error Condition="'$(_ClcValidTag)' != 'True' or '$(_ClcInvalidSequence)' == 'True'" Text="Release requires an exact supported ClcReleaseTag." />
+    <Error Condition="('$(_ClcDevTag)' == 'True' and '$(ClcTargetId)' != 'ssrs-web-dev') or ('$(_ClcStableTag)' == 'True' and '$(ClcTargetId)' != 'ssrs-web-production') or ('$(_ClcDevTag)' != 'True' and '$(_ClcStableTag)' != 'True' and '$(ClcTargetId)' != '')" Text="ClcTargetId must match the compiled release tag; beta/RC have no deployment target." />
+  </Target>
 
 </Project>

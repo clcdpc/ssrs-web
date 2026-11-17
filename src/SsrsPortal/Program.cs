@@ -36,6 +36,12 @@ try
 {
 var builder = WebApplication.CreateBuilder(args);
 startupBuilder = builder;
+#if CLC_RELEASE
+// Development-only overrides and transient keys belong to Synthetic builds.
+// Reject before logging/configuration can select any runtime filesystem path.
+if (!DeploymentContract.EnvironmentSupported(builder.Environment.EnvironmentName))
+{ throw new InvalidOperationException("Release startup requires Production or Staging."); }
+#endif
 fileLogging = ApplicationLogging.Create(builder);
 ExternalConfigurationLoader.AddTo(builder);
 fileLogging.Register(builder);
@@ -393,5 +399,5 @@ static async Task FailureAsync(HttpContext context, string code, int status, Exc
 
 public partial class Program
 {
-    internal const string ApplicationDirectoryName = "clc-ssrs-web";
+    internal static string ApplicationDirectoryName => ReleaseTarget.ApplicationDirectoryName;
 }

@@ -12,6 +12,8 @@
     <AssemblyMetadata Include="Clc.ReleaseId" Value="ssrs-web-test-001" />
     <AssemblyMetadata Include="Clc.SourceCommit" Value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" />
     <AssemblyMetadata Include="Clc.IdentityKind" Value="Release" />
+    <AssemblyMetadata Include="Clc.ReleaseTag" Value="v1.0.0-dev.1" />
+    <AssemblyMetadata Include="Clc.TargetId" Value="ssrs-web-dev" />
     <ProjectReference Include="../SsrsPortal.Tests/SsrsPortal.Tests.csproj" />
     <None Include="../../scripts/subscriptions/001-Subscriptions.sql" Link="001-Subscriptions.sql" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../scripts/subscriptions/002-Hangfire.sql;../../scripts/subscriptions/003-SubscriptionPermissions.sql" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
