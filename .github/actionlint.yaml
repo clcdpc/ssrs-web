@@ -1,0 +1,2 @@
+self-hosted-runner:
+  labels: [ssrs-web-dev, ssrs-web-production]

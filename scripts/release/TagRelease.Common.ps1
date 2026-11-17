@@ -90,69 +90,60 @@ function Resolve-SsrsTag([string] $Tag) {
     }
     Stop-TagRelease 'TagDepth'
 }
-function Assert-SsrsTagSource($Tag,[string] $SourceCommit,$Master,$Comparison,$Pulls,[scriptblock] $ReadBranch,[scriptblock] $ReadPermission) {
-    if ($SourceCommit -cnotmatch '^[a-f0-9]{40}$' -or $Master.name -cne 'master' -or $Master.protected -isnot [bool] -or -not $Master.protected -or
+function Assert-SsrsTagSource($Tag,[string] $SourceCommit,$Master,$Comparison) {
+    if ($SourceCommit -cnotmatch '^[a-f0-9]{40}$') { Stop-TagRelease 'SourceRelationshipUnknown' }
+    # Native repository/tag rules authorize the release decision. DEV and
+    # archive-only channels can select any commit, independent of PR state.
+    if ($Tag.channel -cne 'stable') { return 'tag' }
+    if ($Master.name -cne 'master' -or $Master.protected -isnot [bool] -or -not $Master.protected -or
         $Master.commit.sha -cnotmatch '^[a-f0-9]{40}$' -or $Comparison.base_commit.sha -cne $SourceCommit) { Stop-TagRelease 'SourceRelationshipUnknown' }
     if ($Comparison.status -cin @('ahead','identical')) { return 'master' }
     if ($Comparison.status -cnotin @('behind','diverged')) { Stop-TagRelease 'SourceRelationshipUnknown' }
-    if ($Tag.channel -cne 'dev') { Stop-TagRelease 'ProtectedMasterRequired' }
-    foreach ($pr in $Pulls) {
-        if ($pr.state -cne 'open' -or $pr.base.ref -cne 'master' -or $pr.base.repo.full_name -cne 'clcdpc/ssrs-web' -or
-            $null -eq $pr.head.repo -or $pr.head.repo.full_name -cne 'clcdpc/ssrs-web' -or $pr.head.repo.fork -ne $false -or $pr.head.sha -cne $SourceCommit) { continue }
-        $branch=& $ReadBranch $pr.head.ref
-        $permission=& $ReadPermission $pr.user.login
-        if ($branch.ref -ceq ('refs/heads/'+$pr.head.ref) -and $branch.object.type -ceq 'commit' -and $branch.object.sha -ceq $SourceCommit -and
-            $permission.permission -cin @('write','maintain','admin')) { return 'pull-request-'+$pr.number }
-    }
-    Stop-TagRelease 'EligiblePullRequestRequired'
+    Stop-TagRelease 'ProtectedMasterRequired'
 }
-function Get-SsrsSourceEligibility($Tag,[string] $SourceCommit,[string] $EventName='push') {
+function Get-SsrsSourceEligibility($Tag,[string] $SourceCommit) {
+    if ($Tag.channel -cne 'stable') { return Assert-SsrsTagSource $Tag $SourceCommit $null $null }
     $master=Invoke-TagGitHub '/repos/clcdpc/ssrs-web/branches/master'
     $comparison=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/compare/'+$SourceCommit+'...'+$master.commit.sha)
-    $pulls=if ($Tag.channel -ceq 'dev' -and $comparison.status -cnotin @('ahead','identical')) { Get-TagPages '/repos/clcdpc/ssrs-web/pulls?state=open&base=master' '' } else { @() }
-    try { return Assert-SsrsTagSource $Tag $SourceCommit $master $comparison $pulls {
-        param($Name) Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/ref/heads/'+[Uri]::EscapeDataString($Name))
-    } { param($Login) Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/collaborators/'+[Uri]::EscapeDataString($Login)+'/permission') }
-    } catch {
-        if ($_.Exception.Message -cne 'Release.Tag.EligiblePullRequestRequired' -or $Tag.channel -cne 'dev' -or $EventName -cne 'workflow_dispatch') { throw }
-        # Only a new tag dispatch can use historical qualification. Initial push
-        # eligibility is unchanged. GitHub immutable releases also lock the tag.
-        $reference=Resolve-SsrsTag $Tag.tag
-        $archive=Get-SsrsCanonicalArchive $Tag $reference
-        if (-not $archive -or $archive.release.immutable -ne $true -or $archive.metadata.sourceCommit -cne $SourceCommit) { Stop-TagRelease 'HistoricalImmutableReleaseRequired' }
-        Assert-SsrsHistoricalArchive $archive $master
-        return 'historical-release-'+$archive.release.id
-    }
+    return Assert-SsrsTagSource $Tag $SourceCommit $master $comparison
 }
-function Assert-SsrsProducerFiles($SourceTree,$TrustedTree) {
-    if ($SourceTree.truncated -ne $false -or $TrustedTree.truncated -ne $false) { Stop-TagRelease 'ProducerTreeIncomplete' }
-    $maps=@()
-    foreach ($tree in @($SourceTree,$TrustedTree)) {
-        $map=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
-        foreach ($entry in $tree.tree) {
-            if ($entry.path -cmatch '^(\.github/|scripts/release/|deployment/toolkit\.lock\.json$|global\.json$)') {
-                if ($entry.type -ceq 'tree') { continue }
-                if ($entry.type -cne 'blob' -or $entry.mode -cnotin @('100644','100755') -or $map.ContainsKey($entry.path)) { Stop-TagRelease 'ProducerFilesUntrusted' }
-                $map.Add($entry.path,($entry.mode+':'+$entry.sha))
-            }
+function Assert-SsrsProducerFiles($SourceTree) {
+    if ($SourceTree.truncated -ne $false) { Stop-TagRelease 'ProducerTreeIncomplete' }
+    $map=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $SourceTree.tree) {
+        if ($entry.path -cmatch '^(\.github/|scripts/release/|deployment/toolkit\.lock\.json$|global\.json$)') {
+            if ($entry.type -ceq 'tree') { continue }
+            if ($entry.type -cne 'blob' -or $entry.mode -cnotin @('100644','100755') -or $entry.sha -cnotmatch '^[a-f0-9]{40}$' -or $map.ContainsKey($entry.path)) { Stop-TagRelease 'ProducerFilesUntrusted' }
+            $map.Add($entry.path,($entry.mode+':'+$entry.sha))
         }
-        if (-not $map.ContainsKey('.github/workflows/release.yml')) { Stop-TagRelease 'ProducerFilesUntrusted' }
-        $maps+=,$map
     }
-    if ($maps[0].Count -ne $maps[1].Count) { Stop-TagRelease 'ProducerFilesUntrusted' }
-    foreach ($path in $maps[0].Keys) { if (-not $maps[1].ContainsKey($path) -or $maps[0][$path] -cne $maps[1][$path]) { Stop-TagRelease 'ProducerFilesUntrusted' } }
+    if (-not $map.ContainsKey('.github/workflows/release.yml')) { Stop-TagRelease 'ProducerFilesUntrusted' }
 }
-function Assert-SsrsTagProducer($EventRun,$Run,$Workflow,$Repository,$Jobs,$Tag,[string] $SourceCommit) {
+function Get-SsrsTagWorkflowContext {
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'push' -or
+        $env:GITHUB_REF_TYPE -cne 'tag' -or $env:GITHUB_REF -cne ('refs/tags/'+$env:GITHUB_REF_NAME) -or
+        $env:GITHUB_WORKFLOW_REF -cne ('clcdpc/ssrs-web/.github/workflows/release.yml@'+$env:GITHUB_REF) -or
+        $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
+        $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]*$' -or $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]*$') { Stop-TagRelease 'ExactTagWorkflowRequired' }
+    $null=Get-SsrsReleaseTag $env:GITHUB_REF_NAME
+    return @{id=[long]$env:GITHUB_RUN_ID;run_attempt=[long]$env:GITHUB_RUN_ATTEMPT;head_sha=$env:GITHUB_SHA;head_branch=$env:GITHUB_REF_NAME;event='push'}
+}
+function Assert-SsrsTagProducer($Context,$Run,$Workflow,$Repository,$Jobs,$Tag,[string] $SourceCommit) {
     if ($Repository.full_name -cne 'clcdpc/ssrs-web' -or $Repository.default_branch -cne 'master' -or $Repository.id -lt 1 -or
-        $EventRun.id -ne $Run.id -or $EventRun.run_attempt -ne $Run.run_attempt -or $EventRun.head_sha -cne $SourceCommit -or
-        $Run.head_sha -cne $SourceCommit -or $Run.head_branch -cne $Tag.tag -or $EventRun.head_branch -cne $Tag.tag -or
+        $Context.id -ne $Run.id -or $Context.run_attempt -ne $Run.run_attempt -or $Context.head_sha -cne $SourceCommit -or
+        $Run.head_sha -cne $SourceCommit -or $Run.head_branch -cne $Tag.tag -or $Context.head_branch -cne $Tag.tag -or
         $Run.id -lt 1 -or $Run.run_attempt -lt 1 -or $Run.workflow_id -ne $Workflow.id -or $Workflow.path -cne '.github/workflows/release.yml' -or
         $Run.path -cnotin @('.github/workflows/release.yml',('.github/workflows/release.yml@refs/tags/'+$Tag.tag)) -or
-        $Run.event -cnotin @('push','workflow_dispatch') -or $EventRun.event -cne $Run.event -or $Run.status -cne 'completed' -or $EventRun.status -cne 'completed' -or
-        $Run.conclusion -cne 'success' -or $EventRun.conclusion -cne 'success' -or $Run.repository.id -ne $Repository.id -or
-        $EventRun.repository.id -ne $Repository.id -or $Run.head_repository.id -ne $Repository.id -or $EventRun.head_repository.id -ne $Repository.id) { Stop-TagRelease 'ProducerMismatch' }
-    $job=@($Jobs | Where-Object { $_.name -ceq 'release' })
-    if ($job.Count -ne 1 -or $job[0].run_id -ne $Run.id -or $job[0].run_attempt -ne $Run.run_attempt -or $job[0].head_sha -cne $SourceCommit -or
+        $Run.event -cne 'push' -or $Context.event -cne $Run.event -or
+        ($Run.status -cne 'in_progress' -and $Run.status -cne 'completed') -or
+        ($Run.status -ceq 'completed' -and $Run.conclusion -cne 'success') -or
+        ($Run.status -ceq 'in_progress' -and $null -ne $Run.conclusion) -or
+        $Run.repository.id -ne $Repository.id -or $Run.head_repository.id -ne $Repository.id) { Stop-TagRelease 'ProducerMismatch' }
+    Assert-SsrsCompletedHostedJob $Jobs $Run 'release'
+}
+function Assert-SsrsCompletedHostedJob($Jobs,$Run,[string] $Name) {
+    $job=@($Jobs | Where-Object { $_.name -ceq $Name })
+    if ($job.Count -ne 1 -or $job[0].id -lt 1 -or $job[0].run_id -ne $Run.id -or $job[0].run_attempt -ne $Run.run_attempt -or $job[0].head_sha -cne $Run.head_sha -or
         $job[0].status -cne 'completed' -or $job[0].conclusion -cne 'success' -or $job[0].labels -cnotcontains 'windows-2022' -or $job[0].labels -contains 'self-hosted') { Stop-TagRelease 'BuildJobMismatch' }
 }
 function Assert-SsrsTagArtifact($Artifact,$Run,$Repository,[string] $Name) {
@@ -181,27 +172,18 @@ function Assert-SsrsTagProvenance($Provenance,$Run,$Artifact) {
         $p.integrityVerified -ne $true -or $p.deploymentApproval -ne $false -or $p.hostInstallationApproval -ne $false -or
         $p.innerReleaseSha256 -cnotmatch '^[a-f0-9]{64}$' -or $p.manifestSha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-TagRelease 'ProvenanceMismatch' }
 }
-function Get-SsrsAuthenticatedTagRelease($EventRun,[string] $TrustedCommit,[string] $Directory) {
-    if ($TrustedCommit -cnotmatch '^[a-f0-9]{40}$' -or $EventRun.id -lt 1) { Stop-TagRelease 'InvalidContext' }
-    $tag=Get-SsrsReleaseTag $EventRun.head_branch
+function Get-SsrsAuthenticatedTagRelease($Context,[string] $WorkflowCommit,[string] $Directory) {
+    if ($WorkflowCommit -cnotmatch '^[a-f0-9]{40}$' -or $WorkflowCommit -cne $Context.head_sha -or $Context.id -lt 1) { Stop-TagRelease 'InvalidContext' }
+    $tag=Get-SsrsReleaseTag $Context.head_branch
     $reference=Resolve-SsrsTag $tag.tag
-    $run=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/actions/runs/'+$EventRun.id)
+    $run=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/actions/runs/'+$Context.id)
     $repo=Invoke-TagGitHub '/repos/clcdpc/ssrs-web/'
     $workflow=Invoke-TagGitHub '/repos/clcdpc/ssrs-web/actions/workflows/release.yml'
     $jobs=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$run.id+'/attempts/'+$run.run_attempt+'/jobs') 'jobs'
-    Assert-SsrsTagProducer $EventRun $run $workflow $repo $jobs $tag $reference.sourceCommit
-    $eligibility=Get-SsrsSourceEligibility $tag $reference.sourceCommit $run.event
+    Assert-SsrsTagProducer $Context $run $workflow $repo $jobs $tag $reference.sourceCommit
+    $eligibility=Get-SsrsSourceEligibility $tag $reference.sourceCommit
     $sourceTree=Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/trees/'+$reference.sourceCommit+'?recursive=1')
-    # Protected-master history establishes trust in that exact historical
-    # producer. Unmerged sources must instead match the consumer's reviewed
-    # producer files, so their PR cannot redefine its own admission/build code.
-    $producerTrustCommit=$TrustedCommit
-    if ($eligibility -clike 'historical-release-*') {
-        $historical=Get-SsrsCanonicalArchive $tag $reference
-        $producerTrustCommit=$historical.metadata.consumerCommit
-    }
-    $trustedTree=if ($eligibility -ceq 'master') { $sourceTree } else { Invoke-TagGitHub ('/repos/clcdpc/ssrs-web/git/trees/'+$producerTrustCommit+'?recursive=1') }
-    Assert-SsrsProducerFiles $sourceTree $trustedTree
+    Assert-SsrsProducerFiles $sourceTree
     $artifacts=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$run.id+'/artifacts') 'artifacts'
     $suffix=$run.id.ToString()+'-'+$run.run_attempt
     $release=@($artifacts | Where-Object name -CEQ ('ssrs-web-release-'+$suffix))
@@ -227,7 +209,7 @@ function Get-SsrsAuthenticatedTagRelease($EventRun,[string] $TrustedCommit,[stri
     $again=Resolve-SsrsTag $tag.tag
     if ($again.objectSha -cne $reference.objectSha -or $again.sourceCommit -cne $reference.sourceCommit) { Stop-TagRelease 'TagMoved' }
     return @{tag=$tag.tag;channel=$tag.channel;targetId=$tag.targetId;sourceCommit=$reference.sourceCommit;tagObjectSha=$reference.objectSha;
-        sourceEligibility=$eligibility;trustedCommit=$TrustedCommit;provenance=$p;archivePath=$archive;run=$run}
+        sourceEligibility=$eligibility;workflowCommit=$WorkflowCommit;provenance=$p;archivePath=$archive;run=$run}
 }
 function Test-SsrsTagSuperseded($Release) {
     $selected=Get-SsrsReleaseTag $Release.tag
@@ -240,7 +222,7 @@ function Test-SsrsTagSuperseded($Release) {
         $target=Resolve-SsrsTag $candidate.tag
         # Unknown relationships fail closed; a valid newer tag may suppress an older
         # deployment even if its build has not completed. The toolkit owns lineage.
-        $null=Get-SsrsSourceEligibility $candidate $target.sourceCommit 'workflow_dispatch'
+        $null=Get-SsrsSourceEligibility $candidate $target.sourceCommit
         return $true
     }
     return $false

@@ -17,30 +17,23 @@ jobs:
       integration_branch: master
       deployment_channel: DEV
       release_workflow: .github/workflows/release.yml
-      deployment_workflow: .github/workflows/deploy-release.yml
+      deployment_workflow: .github/workflows/release.yml
       diagnostic_workflow: .github/workflows/diagnose-deployment.yml
-      activation_variable: SSRS_DEV_DEPLOYMENT_ENABLED
-      runner_group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
       runner_labels: self-hosted,Windows,X64,ssrs-web-dev
-      # The protected-master consumer directly defines its deployment job;
-      # there is no shared orchestration revision. This checker observes only
-      # the retained DEV deployment flag, not every automatic activation gate.
+      # This older read-only checker may report unsupported routing/activation
+      # expectations. Its result never gates the automatic release workflow.
       administrative: false
 
   host:
-    # Rollout flag/guards are not authorization. Infrastructure must independently
-    # allowlist this exact master workflow in the existing dedicated runner group.
+    # Separate optional read-only host diagnostic; never a deployment gate.
     if: >-
       github.repository == 'clcdpc/ssrs-web' &&
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/master' && github.ref_protected &&
       github.workflow_ref == 'clcdpc/ssrs-web/.github/workflows/diagnose-deployment.yml@refs/heads/master' &&
       github.workflow_sha == github.sha &&
-      vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY == 'true' &&
-      vars.SSRS_DEV_RUNNER_GROUP != '' && vars.SSRS_DEV_RUNNER_LABELS != ''
-    runs-on:
-      group: ${{ vars.SSRS_DEV_RUNNER_GROUP }}
-      labels: ${{ fromJSON(vars.SSRS_DEV_RUNNER_LABELS || '[]') }}
+      vars.SSRS_DEV_DIAGNOSTIC_RUNNER_READY == 'true'
+    runs-on: [self-hosted, Windows, X64, ssrs-web-dev]
     environment: ssrs-web-dev
     timeout-minutes: 20
     defaults:

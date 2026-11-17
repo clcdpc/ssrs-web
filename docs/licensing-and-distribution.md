@@ -10,7 +10,7 @@ Central Library Consortium owns the project-authored code. Michael Fields has co
 
 Release builds compile the full source commit into assembly metadata. The application exposes a **Source code and license** link to that exact commit, not to a moving branch. The CLC release manifest also records the repository and full commit SHA. Before enabling network access to a release, operators must ensure that the exact source commit and its AGPL license are publicly reachable, or provide users an equivalent source copy. The MIT-licensed `Clc.Deployment.AspNetCore` companion retains separate attribution and exact source/provenance information. Its MIT license does not add AGPL network source-sharing obligations; the portal's own AGPL obligations remain. A fresh snapshot import changes the commit identity; prior private-history SHAs do not automatically resolve to the new public repository. Do not substitute a floating `master` link for a release's corresponding source.
 
-The release pipeline remains a CLC-specific, protected process. Its compiled release identity is tied to an immutable source SHA; the repository README and [CLC deployment runbook](clc-deployment.md) describe the separate runner, approval, host, and toolkit requirements.
+The release pipeline remains a CLC-specific, protected process. Its compiled release identity is tied to an immutable source SHA; the repository README and [CLC deployment runbook](clc-deployment.md) describe tag release authority, dedicated runners, independently installed toolkit, approved initial baseline and host standing authorization.
 
 ## Third-party and binary notices
 

@@ -4,7 +4,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-$workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/deploy-release.yml'))
+$workflow=[IO.File]::ReadAllText((Join-Path $repository '.github/workflows/release.yml'))
 $functions=[IO.File]::ReadAllText((Join-Path $repository 'scripts/release/Deployment.Common.ps1'))
 $parseErrors=$null; $null=[Management.Automation.Language.Parser]::ParseInput($functions,[ref]$null,[ref]$parseErrors)
 if ($parseErrors) { throw ($parseErrors | Out-String) }
@@ -98,9 +98,8 @@ try {
         Assert-Fails { Assert-SsrsLocalIisConfiguration (Read-SsrsXml ([Text.Encoding]::UTF8.GetBytes('<configuration><configurationRedirection enabled="false" configSource="external.config"/></configuration>'))) } 'Ssrs.Prerequisite.UnsupportedIisConfigurationLayout'
     }
     Test-Case 'Runner shell templates disable profiles and preserve trusted PowerShell script and native exit behavior' {
-        $admissionShell=[regex]::Match($workflow,'(?m)^        shell: (pwsh .*)$').Groups[1].Value.TrimEnd("`r")
         $deployShell=[regex]::Match($workflow,'(?m)^        shell: (C:\\CLC\\Tools\\PowerShell\\7\.6\.6\\pwsh\.exe .*)$').Groups[1].Value.TrimEnd("`r")
-        Assert-True ($admissionShell -ceq 'pwsh -NoLogo -NoProfile -NonInteractive -File "{0}"')
+        Assert-True ($workflow.Contains('needs: release') -and $workflow.Contains('needs: archive'))
         $parts=$deployShell.Split(' ',2)
         Assert-True ($parts.Count -eq 2 -and $parts[0] -ceq 'C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe' -and $parts[0].IndexOf(' ') -lt 0)
         Assert-True ($parts[1].Contains('-NoLogo -NoProfile -NonInteractive -CommandWithArgs') -and $parts[1].Contains('[System.IO.File]::ReadAllText($args[0])') -and $parts[1].Contains('"{0}"'))
@@ -226,9 +225,9 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
     }
     Test-Case 'Workflow routing and trust remain external to labels; privileged job has no checkout or source build' {
         $deploy=$workflow.Substring($workflow.IndexOf('  deploy:'))
-        Assert-True ($deploy.Contains('vars.SSRS_DEV_RUNNER_GROUP') -and $deploy.Contains('vars.SSRS_DEV_RUNNER_LABELS'))
+        Assert-True ($deploy.Contains("runs-on: [self-hosted, Windows, X64, '`${{ needs.archive.outputs.target }}']"))
         Assert-True (-not ($deploy -match 'uses: actions/checkout|pull_request_target|dotnet publish|npm ci|sqlcmd'))
-        Assert-True ($workflow.Contains('@refs/heads/master') -and $workflow.Contains('RUNNER_ADMISSION_READY'))
+        Assert-True ($deploy.Contains('Ssrs.ExactTagWorkflowRequired') -and -not $deploy.Contains('vars.'))
         Assert-True (-not ($functions -match 'Restore-ClcIisDeployment|Stop-WebAppPool|Start-WebAppPool|Remove-Item|sqlcmd'))
     }
     if ($IsWindows) {

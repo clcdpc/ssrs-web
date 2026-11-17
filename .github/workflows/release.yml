@@ -1,18 +1,16 @@
-name: Produce immutable SSRS Web release
+name: Release and deploy SSRS Web tag
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 permissions:
   contents: read
   actions: read
-  pull-requests: read
 concurrency:
   group: ssrs-web-release-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   release:
-    # Hosted production only. The master-owned consumer authenticates this producer.
+    # The pushed tag selects this workflow and every release/deployment script.
     if: github.repository == 'clcdpc/ssrs-web'
     runs-on: windows-2022
     timeout-minutes: 30
@@ -290,7 +288,7 @@ jobs:
         id: build
         env:
           SELECTED_COMMIT: ${{ github.sha }}
-          # This repository's pinned toolkit is public. PR-tag code gets no secret.
+          # This repository's pinned toolkit is public; no secret is required.
           TOOLKIT_READ_TOKEN: ''
         run: ./scripts/release/Build-PortalRelease.ps1 -SourceCommit $env:SELECTED_COMMIT
       - name: Recheck tag identity before publication
@@ -333,3 +331,99 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: false
+  archive:
+    needs: release
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: ssrs-web-archive-${{ github.ref_name }}
+      cancel-in-progress: false
+    outputs:
+      target: ${{ steps.publication.outputs.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Authenticate job-local packaging PowerShell
+        shell: pwsh
+        run: ./scripts/release/Get-BuildPowerShell.ps1 -Destination "$env:RUNNER_TEMP/ssrs-archive-pwsh"
+      - name: Independently verify and archive the release without replacing assets
+        id: publication
+        shell: pwsh
+        env:
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: '& "$env:RUNNER_TEMP/ssrs-archive-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Publish-TagRelease.ps1'
+  deploy:
+    needs: archive
+    if: needs.archive.outputs.target == 'ssrs-web-dev' || needs.archive.outputs.target == 'ssrs-web-production'
+    runs-on: [self-hosted, Windows, X64, '${{ needs.archive.outputs.target }}']
+    environment: ${{ needs.archive.outputs.target }}
+    concurrency:
+      group: ${{ needs.archive.outputs.target }}
+      cancel-in-progress: false
+    timeout-minutes: 60
+    steps:
+      - name: Load exact tagged deployment code and reauthenticate release
+        id: deployment
+        shell: C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe -NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"
+        env:
+          SSRS_EXPECTED_TARGET: ${{ needs.archive.outputs.target }}
+          SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference='Stop'
+          if ($env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_JOB -cne 'deploy' -or $env:GITHUB_EVENT_NAME -cne 'push' -or $env:GITHUB_REF_TYPE -cne 'tag' -or
+              $env:GITHUB_REF -cne ('refs/tags/'+$env:GITHUB_REF_NAME) -or
+              $env:GITHUB_WORKFLOW_REF -cne ('clcdpc/ssrs-web/.github/workflows/release.yml@'+$env:GITHUB_REF) -or
+              $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Ssrs.ExactTagWorkflowRequired' }
+          $directory=Join-Path $env:RUNNER_TEMP ('ssrs-trusted-deploy-'+[Guid]::NewGuid().ToString('N'))
+          [void][IO.Directory]::CreateDirectory($directory)
+          $handler=[Net.Http.HttpClientHandler]::new(); $handler.AllowAutoRedirect=$false; $handler.UseCookies=$false
+          $client=[Net.Http.HttpClient]::new($handler); $client.Timeout=[TimeSpan]::FromSeconds(60)
+          try {
+              $client.DefaultRequestHeaders.UserAgent.ParseAdd('ssrs-web-trusted-deployment/1')
+              $client.DefaultRequestHeaders.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$env:SSRS_ARTIFACT_READ_TOKEN)
+              $client.DefaultRequestHeaders.Add('X-GitHub-Api-Version','2022-11-28')
+              $response=$client.GetAsync(('https://api.github.com/repos/clcdpc/ssrs-web/git/trees/'+$env:GITHUB_WORKFLOW_SHA+'?recursive=1')).GetAwaiter().GetResult()
+              try {
+                  $response.EnsureSuccessStatusCode() | Out-Null
+                  if ($response.Content.Headers.ContentLength -gt 16777216) { throw 'Ssrs.TaggedTreeBound' }
+                  $tree=ConvertFrom-Json ($response.Content.ReadAsStringAsync().GetAwaiter().GetResult())
+                  if ($tree.truncated -ne $false) { throw 'Ssrs.TaggedTreeIncomplete' }
+                  $workflow=@($tree.tree | Where-Object path -CEQ '.github/workflows/release.yml')
+                  if ($workflow.Count -ne 1 -or $workflow[0].type -cne 'blob' -or $workflow[0].mode -cnotin @('100644','100755')) { throw 'Ssrs.TaggedWorkflowRequired' }
+              } finally { $response.Dispose() }
+              foreach ($name in @('ReleaseArchive.Common.ps1','TagRelease.Common.ps1','Deployment.Common.ps1','AutomaticDeployment.Adapter.ps1','Invoke-TagDeployment.ps1')) {
+                  $path='scripts/release/'+$name
+                  $expected=@($tree.tree | Where-Object path -CEQ $path)
+                  if ($expected.Count -ne 1 -or $expected[0].type -cne 'blob' -or $expected[0].mode -cnotin @('100644','100755')) { throw 'Ssrs.TaggedScriptRequired' }
+                  $uri='https://api.github.com/repos/clcdpc/ssrs-web/contents/'+$path+'?ref='+$env:GITHUB_WORKFLOW_SHA
+                  $response=$client.GetAsync($uri).GetAwaiter().GetResult()
+                  try {
+                      $response.EnsureSuccessStatusCode() | Out-Null
+                      if ($response.Content.Headers.ContentLength -gt 1048576) { throw 'Ssrs.TrustedScriptBound' }
+                      $record=ConvertFrom-Json ($response.Content.ReadAsStringAsync().GetAwaiter().GetResult())
+                      if ($record.type -cne 'file' -or $record.path -cne $path -or $record.encoding -cne 'base64' -or $record.size -gt 1048576) { throw 'Ssrs.TrustedScriptRequired' }
+                      $bytes=[Convert]::FromBase64String($record.content)
+                      $prefix=[Text.Encoding]::UTF8.GetBytes('blob '+$bytes.Length+[char]0)
+                      $hash=[Convert]::ToHexString([Security.Cryptography.SHA1]::HashData([byte[]]($prefix+$bytes))).ToLowerInvariant()
+                      if ($hash -cne $record.sha -or $hash -cne $expected[0].sha -or $bytes.Length -ne $record.size) { throw 'Ssrs.TrustedScriptMismatch' }
+                      $stream=[IO.FileStream]::new((Join-Path $directory $name),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+                      try { $stream.Write($bytes); $stream.Flush($true) } finally { $stream.Dispose() }
+                  } finally { $response.Dispose() }
+              }
+          } finally { $client.Dispose(); $handler.Dispose() }
+          & (Join-Path $directory 'Invoke-TagDeployment.ps1')
+          if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain only whitelisted deployment evidence
+        if: always() && steps.deployment.outputs.evidence-path != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ssrs-web-tag-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.deployment.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30

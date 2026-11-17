@@ -44,15 +44,22 @@ node scripts/check-generated-artifacts.cjs
 git diff --check
 ```
 
-Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The separately protected DEV deployment workflow remains disabled until infrastructure authorizes its privileged runner and host.
+Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. Tag releases use dedicated deployment runners and independently provisioned host standing authorization.
 
 ## Tagged releases
 
-Push an immutable `vMAJOR.MINOR.PATCH-dev.N` tag at protected-master history or the current head of a trusted same-repository open PR targeting `master`. Successive tags select successive commits. The hosted producer builds and tests the exact source; the protected-master consumer independently verifies it and publishes a GitHub Release. DEV, beta (`-beta.N`) and RC (`-rc.N`) are prereleases; beta/RC never deploy. Stable `vMAJOR.MINOR.PATCH` selects the separately disabled production target. Beta, RC and stable require protected-master history.
+Create and push a DEV tag at the selected commit:
 
-For a fresh build of an existing tag, use `gh workflow run release.yml --repo clcdpc/ssrs-web --ref v1.0.0-dev.3`. Branch dispatches are rejected. Existing Release assets remain unchanged; the new Actions artifact transports the current build. Closed historical DEV PRs require independently verified immutable Release evidence.
+```powershell
+git tag v1.2.3-dev.4
+git push origin v1.2.3-dev.4
+```
 
-The [trusted consumer](.github/workflows/deploy-release.yml) archives before automatic DEVWEB (`ssrs-web-dev`) deployment through infrastructure-owned CLC.Deployment standing authorization. **Deployment remains disabled pending compatible toolkit publication/installation and host qualification.** Routine manual deployment dispatch has been removed. See [release rules and activation prerequisites](docs/clc-deployment.md#tag-driven-automatic-deployment).
+The permitted tag push is the release decision. The [tag workflow](.github/workflows/release.yml) automatically builds/tests, publishes the immutable canonical GitHub Release, then deploys through independently installed CLC.Deployment standing authorization. DEV may select unmerged application, workflow, deployment-script and application-owned configuration changes without PR admission or master-file equality. Stable `vMAJOR.MINOR.PATCH` tags require a commit contained in protected master history, including older ancestors, and select `ssrs-web-production`; DEV selects `ssrs-web-dev`. Beta/RC tags publish without deployment. Hosted build/archive success is required before dedicated Windows host deployment.
+
+One-time setup requires repository-wide Restrict actors, two active `v*` tag rulesets (creation with the release team's Always allow bypass; updates/deletions without routine creator bypass), protected master with existing CI checks, and Release immutability enabled before publication. The derived environments use No restriction with no reviewers, wait timers or extra gates; repository-scoped deployment runners are preferred. See the detailed [GitHub/host prerequisites](docs/clc-deployment.md#github-and-host-configuration-prerequisites) and authoritative guide linked there.
+
+Complete independent compatible-runtime installation, host enrollment and a separately approved initial baseline **before** enabling standing authorization. Routine tags then require no manual approval, deployment-routing/activation variables or per-PR exceptions. For a fresh same-tag build, rerun all jobs of the original push run; canonical assets remain unchanged and run/attempt identity distinguishes the new package. External setup evidence, compatible runtime provisioning, live DEV acceptance and Production qualification remain outstanding; follow the [acceptance procedures](docs/clc-deployment.md#planned-dev-and-production-tag-acceptance).
 
 ## Run against DEV SSRS
 

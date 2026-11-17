@@ -5,8 +5,9 @@ param()
 . "$PSScriptRoot/Deployment.Common.ps1"
 . "$PSScriptRoot/AutomaticDeployment.Adapter.ps1"
 
-function Invoke-SsrsAutomaticDeployment($Release,[string] $AuthorizationId,$Evidence) {
+function Invoke-SsrsAutomaticDeployment($Release,$Evidence) {
     if ($Release.targetId -cnotin @('ssrs-web-dev','ssrs-web-production')) { Stop-TagRelease 'DeploymentTargetRequired' }
+    $AuthorizationId=$Release.targetId
     $script:SsrsTargetId=$Release.targetId
     $script:SsrsEnvironmentName=if ($Release.targetId -ceq 'ssrs-web-dev') { 'DEV' } else { 'Production' }
     $Evidence.targetId=$script:SsrsTargetId; $Evidence.environmentName=$script:SsrsEnvironmentName; $Evidence.initializationPerformed=$false
@@ -20,14 +21,14 @@ function Invoke-SsrsAutomaticDeployment($Release,[string] $AuthorizationId,$Evid
         if (-not $state.ReadyForDeployment -or $state.HostState -cne 'Ready') { Stop-Ssrs 'Ssrs.AutomaticDeployment.SeparateEnrollmentRequired' }
         $preflight=Open-SsrsApplicationPreflight $bootstrap $AuthorizationId $true
         $context=Open-SsrsAutomaticContext $bootstrap $AuthorizationId $Release
-        $context.standingAuthorizationId=$env:SSRS_STANDING_AUTHORIZATION_ID
         $Evidence.artifactVerification='GitHubTransportAndInstalledToolkitVerified'
         Assert-SsrsEnvironmentNames ([Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Machine).Keys)
         $again=Resolve-SsrsTag $Release.tag
         if ($again.objectSha -cne $Release.tagObjectSha -or $again.sourceCommit -cne $Release.sourceCommit) { Stop-TagRelease 'TagMoved' }
-        $null=Get-SsrsSourceEligibility (Get-SsrsReleaseTag $Release.tag) $Release.sourceCommit $Release.run.event
+        $null=Get-SsrsSourceEligibility (Get-SsrsReleaseTag $Release.tag) $Release.sourceCommit
         $archive=Get-SsrsCanonicalArchive (Get-SsrsReleaseTag $Release.tag) $again
         if (-not $archive) { Stop-TagRelease 'ArchiveRequiredBeforeDeployment' }
+        Assert-SsrsCanonicalCompatibility $archive $Release
         if (Test-SsrsTagSuperseded $Release) { $Evidence.outcome='Superseded'; $Evidence.nextAction='None'; return $Evidence }
         $Evidence.deploymentPhase='Unknown'; $Evidence.mutationScope='Unknown'; $Evidence.requiresOperatorIntervention=$true
         $result=Invoke-SsrsToolkitAutomaticDeployment $Release $context
@@ -73,23 +74,20 @@ function Open-SsrsAutomaticContext($Bootstrap,[string] $AuthorizationId,$Release
 function Invoke-SsrsTagDeploymentEntry {
     $evidence=New-SsrsEvidence
     try {
-        if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6' -or
-            $env:GITHUB_REPOSITORY -cne 'clcdpc/ssrs-web' -or $env:GITHUB_EVENT_NAME -cne 'workflow_run' -or
-            $env:GITHUB_REF -cne 'refs/heads/master' -or $env:GITHUB_REF_PROTECTED -cne 'true' -or
-            $env:GITHUB_WORKFLOW_REF -cne 'clcdpc/ssrs-web/.github/workflows/deploy-release.yml@refs/heads/master' -or
-            $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or $env:SSRS_AUTOMATIC_ENABLED -cne 'true' -or
-            $env:SSRS_EXTERNAL_RUNNER_ADMISSION -cne 'true') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
-        Assert-SsrsSelector $env:SSRS_AUTHORIZATION_ID
-        Assert-SsrsSelector $env:SSRS_STANDING_AUTHORIZATION_ID
-        $event=Read-TagJson ([IO.File]::ReadAllBytes($env:GITHUB_EVENT_PATH))
-        $release=Get-SsrsAuthenticatedTagRelease $event.workflow_run $env:GITHUB_WORKFLOW_SHA (Join-Path $env:RUNNER_TEMP ([Guid]::NewGuid().ToString('N')))
+        if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6' -or $env:GITHUB_JOB -cne 'deploy') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
+        $workflowContext=Get-SsrsTagWorkflowContext
+        $release=Get-SsrsAuthenticatedTagRelease $workflowContext $env:GITHUB_WORKFLOW_SHA (Join-Path $env:RUNNER_TEMP ([Guid]::NewGuid().ToString('N')))
+        $jobs=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$release.run.id+'/attempts/'+$release.run.run_attempt+'/jobs') 'jobs'
+        Assert-SsrsCompletedHostedJob $jobs $release.run 'archive'
         if ($release.targetId -cne $env:SSRS_EXPECTED_TARGET) { Stop-TagRelease 'TargetMismatch' }
         $script:SsrsTargetId=$release.targetId
         $script:SsrsEnvironmentName=if ($release.targetId -ceq 'ssrs-web-dev') { 'DEV' } else { 'Production' }
         $evidence=New-SsrsEvidence
         $evidence.releaseId=$release.provenance.releaseId; $evidence.sourceCommit=$release.sourceCommit
+        $evidence.releaseTag=$release.tag; $evidence.tagObjectSha=$release.tagObjectSha
+        $evidence.runId=$release.run.id; $evidence.runAttempt=$release.run.run_attempt; $evidence.packageSha256=$release.provenance.innerReleaseSha256
         if (Test-SsrsTagSuperseded $release) { $evidence.outcome='Superseded'; $evidence.nextAction='None' }
-        else { $null=Invoke-SsrsAutomaticDeployment $release $env:SSRS_AUTHORIZATION_ID $evidence }
+        else { $null=Invoke-SsrsAutomaticDeployment $release $evidence }
     } catch {
         Set-SsrsSafeFailure $evidence $_
         throw [InvalidOperationException]::new('Ssrs.AutomaticDeployment.FailedSeeRetainedEvidence')

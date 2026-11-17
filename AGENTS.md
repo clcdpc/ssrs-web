@@ -5,7 +5,8 @@
 - `master` is the integration branch. Use short-lived feature or cleanup branches and open PRs against `master`; do not merge unless explicitly instructed.
 - Follow the existing .NET, PowerShell, native JavaScript, testing and security conventions. Use braces for C# and PowerShell conditional blocks.
 - Use the SDK in `global.json`, locked npm dependencies and the verification commands in [README.md](README.md).
-- Use GitHub-hosted `ubuntu-latest` for Linux application/browser CI, installing Chromium and its native dependencies through the locked Playwright package. Preserve trusted-contributor admission checks and the GitHub-hosted Windows compatibility job; DEV deployment remains separately gated and disabled until infrastructure authorizes it.
+- Use GitHub-hosted `ubuntu-latest` for Linux application/browser CI, installing Chromium and its native dependencies through the locked Playwright package. Preserve trusted-contributor admission checks and the GitHub-hosted Windows compatibility job; tag deployments require independently provisioned host standing authorization.
+- Preserve the [tag-authoritative deployment architecture](docs/clc-deployment.md): one tag-push workflow, hosted release/archive then dedicated Windows deployment; DEV accepts unmerged workflow/script/configuration changes, stable tags require protected master ancestry. Host enrollment and a separately approved baseline precede standing authorization; routine tags require no additional human approval, routing/activation variables or PR admission.
 - Keep operational configuration and credentials out of source control.
 
 ## Generated files and visual evidence
