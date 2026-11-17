@@ -59,7 +59,7 @@ jobs:
           dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcReleaseTag=v1.0.0-dev.1 -p:ClcTargetId=ssrs-web-dev -p:ClcReleaseId=ssrs-web-ci-qualification -p:ClcSourceCommit=1111111111111111111111111111111111111111 -p:ClcIdentityKind=Release --output artifacts/ci-release-publish
           if ($LASTEXITCODE) { throw 'Release.PublishFailed' }
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-release-publish
-          ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish
+          ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish -PublishedToolkit
   windows-per-target-integration:
     if: >-
       (github.event_name == 'pull_request' &&
