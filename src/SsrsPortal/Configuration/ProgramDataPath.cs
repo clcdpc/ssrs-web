@@ -85,7 +85,11 @@ internal static class ProgramDataPath
             var systemDirectory = GetSystemWindowsDirectory();
             RequireSystemDriveAgreement(systemDirectory, Environment.GetEnvironmentVariable("SystemDrive"));
             var normalized = NormalizeWindowsPath(path, systemDirectory);
-            return Path.GetFullPath(normalized);
+            var root = Path.GetFullPath(normalized);
+            var inherited = Environment.GetEnvironmentVariable("ProgramData");
+            if (!string.IsNullOrEmpty(inherited) && !string.Equals(inherited, root, StringComparison.OrdinalIgnoreCase))
+            { throw new InvalidOperationException("The configured ProgramData path disagrees with the operating system."); }
+            return root;
         }
         finally { Marshal.FreeCoTaskMem(buffer); }
     }

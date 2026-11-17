@@ -16,6 +16,9 @@ function Invoke-SsrsToolkitAutomaticDeployment($Release,$Context) {
     $expectedChannel=if ($Release.targetId -ceq 'ssrs-web-dev') {'DEV'} else {'Production'}
     if ($classification.channel -cne $expectedChannel) { Stop-Ssrs 'Ssrs.AutomaticDeployment.ChannelMismatch' }
     $p=$Release.provenance
+    $zip=[IO.Compression.ZipFile]::OpenRead($Release.archivePath)
+    try { Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.dll')))) $p.releaseId $Release.sourceCommit $Release.tag $Release.targetId }
+    finally { $zip.Dispose() }
     $identity=[ordered]@{contractFamily='clc-file-iis-v1';schemaVersion=1;recordKind='verified-release';targetId=$Release.targetId;applicationId='ssrs-web';
         releaseId=$p.releaseId;tag=$Release.tag;sourceRepository='clcdpc/ssrs-web';sourceCommit=$Release.sourceCommit;
         releaseZipSha256=$p.innerReleaseSha256;manifestSha256=$p.manifestSha256;

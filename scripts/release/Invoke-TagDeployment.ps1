@@ -1,6 +1,7 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param()
+. "$PSScriptRoot/Release.Common.ps1"
 . "$PSScriptRoot/TagRelease.Common.ps1"
 . "$PSScriptRoot/Deployment.Common.ps1"
 . "$PSScriptRoot/AutomaticDeployment.Adapter.ps1"
@@ -53,7 +54,7 @@ function Open-SsrsAutomaticContext($Bootstrap,[string] $AuthorizationId,$Release
         $module=Import-Module $session.layout.manifestPath -Force -PassThru -Scope Local
         $selection=& $module {
             param($TargetId)
-            $context=Open-ClcTrustedContext
+            $context=Open-ClcTrustedContext -TargetId $TargetId
             try {
                 $target=Read-ClcProtectedTarget $context $TargetId
                 $null=Add-ClcProtectedPathPin $context $target.record.artifactInboxRoot -Directory -Mutable -RuntimeSid $target.record.runtimeIdentitySid
@@ -64,6 +65,9 @@ function Open-SsrsAutomaticContext($Bootstrap,[string] $AuthorizationId,$Release
         if (-not (Test-ClcValueEqual $selection.target (Get-HTarget $session.configuration))) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
         $verified=& $module { param($Path) Test-ClcRelease -ArchivePath $Path } $Release.archivePath
         $p=$Release.provenance
+        $zip=[IO.Compression.ZipFile]::OpenRead($Release.archivePath)
+        try { Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.dll')))) $p.releaseId $Release.sourceCommit $Release.tag $Release.targetId }
+        finally { $zip.Dispose() }
         if ($verified.integrityVerified -ne $true -or $verified.authorizedForDeployment -ne $false -or $verified.applicationId -cne 'ssrs-web' -or
             $verified.releaseId -cne $p.releaseId -or $verified.sourceCommit -cne $Release.sourceCommit -or $verified.archiveSha256 -cne $p.innerReleaseSha256 -or
             $verified.manifestSha256 -cne $p.manifestSha256) { Stop-Ssrs 'Ssrs.ReleaseInspectionMismatch' }

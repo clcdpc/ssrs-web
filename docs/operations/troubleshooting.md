@@ -6,7 +6,7 @@
 
 `Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. Each caller-owned logging instance stays alive through host shutdown and disposal; concurrent test hosts cannot reconfigure or stop each other. ssrs-web owns `SafeLogLayout`, its output-boundary sanitizer, and explicitly removes default providers so normal events have one sanitized NLog path. Unrelated providers would need their own output policy. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
-Production logs use `%ProgramData%\clc-ssrs-web\Logs\`, resolved through `Environment.SpecialFolder.CommonApplicationData`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
+Released DEV logs use `%ProgramData%\clc-ssrs-web-dev\Logs\`, and stable Production logs use `%ProgramData%\clc-ssrs-web-production\Logs\`. Native Windows known-folder verification and compiled tag/target metadata select the root; local Synthetic development retains `clc-ssrs-web`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
 
 Files use local dates: `ssrs-web-2026-11-01.log`. Extra files use numbered suffixes, such as `ssrs-web-2026-11-01.001.log`. Entries start with a millisecond timestamp, UTC offset, severity and category. Message, template, JSON properties/scopes and any exception details follow; `---` separates entries. Events use this single text format without routine duplicate files. UTC offsets distinguish repeated daylight-saving hours.
 
@@ -38,7 +38,8 @@ Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOver
 Run this reviewed initial setup example in elevated PowerShell on Windows Server 2022. Supply the actual dedicated regular AD service account; runtime needs no local administrator membership. For existing directories, inspect effective permissions and preserve approved administrative entries instead of blindly replacing ACLs. Also follow [external configuration provisioning](README.md#external-configuration-provisioning).
 
 ```powershell
-$applicationRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'clc-ssrs-web'
+$applicationRoot = (& dotnet .\SsrsPortal.dll --clc-appdata-directory).Trim()
+if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($applicationRoot)) { throw 'Compiled target discovery failed.' }
 $serviceAccount = Read-Host 'Dedicated IIS application pool identity (DOMAIN\account)'
 $serviceSid = ([Security.Principal.NTAccount]::new($serviceAccount)).Translate([Security.Principal.SecurityIdentifier])
 $administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
@@ -63,7 +64,7 @@ The service gets Config read/traverse and Logs Modify, including create/write/ap
 
 ### Startup troubleshooting and deployment
 
-Normal delivery uses one [tag-push workflow with ordered release/archive/deploy jobs](../clc-deployment.md#tag-driven-automatic-deployment). A permitted tag push selects the exact implementation; deployment follows successful immutable publication and requires independently provisioned host standing authorization. For commissioning or host failures, follow the authoritative [Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) and [SSRS-specific prerequisites](../clc-deployment.md#github-and-host-configuration-prerequisites). The [optional read-only diagnostic](../clc-deployment.md#read-only-deployment-prerequisite-validation) retains older architecture limitations; do not add obsolete routing/activation settings to satisfy it. Compatible runtime provisioning, enrollment and a separately approved baseline precede standing authorization; exceptional recovery remains separate administration.
+Normal delivery uses one [tag-push workflow with ordered release/archive/deploy jobs](../clc-deployment.md#tag-driven-automatic-deployment). A permitted tag push selects the exact implementation; deployment follows successful immutable publication and requires independently provisioned host standing authorization. For commissioning or host failures, follow the authoritative [Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) and [SSRS-specific prerequisites](../clc-deployment.md#github-and-host-configuration-prerequisites). The [optional read-only diagnostic](../clc-deployment.md#read-only-deployment-prerequisite-validation) uses the current GET-only GitHub setup checker and never accesses the host or gates deployment. Compatible runtime provisioning, enrollment and a separately approved baseline precede standing authorization; exceptional recovery remains separate administration.
 
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
@@ -84,7 +85,7 @@ Complete these checks under an authorized DEV host procedure; synthetic file tes
 
 ## Detailed SSRS diagnostics
 
-Edit only `%ProgramData%\clc-ssrs-web\Config\application.json`. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration:
+Edit only the selected release target's protected `Config\application.json`: `%ProgramData%\clc-ssrs-web-dev` for DEV or `%ProgramData%\clc-ssrs-web-production` for stable Production. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration:
 
 ```json
 "Diagnostics": {

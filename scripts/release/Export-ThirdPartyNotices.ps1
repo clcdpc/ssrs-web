@@ -67,7 +67,16 @@ function ConvertTo-MarkdownCell([string] $Value) {
 
 function Get-PackageNoticeName([string] $Id, [string] $Version, [string] $FileName) {
     if ($FileName -cnotmatch '\A[A-Za-z0-9._-]+\z') { throw 'ThirdParty.LicenseFileNameInvalid' }
-    return "$Id-$Version-$FileName"
+    $name="$Id-$Version-$FileName"
+    # The canonical Production stage/backup prefix leaves 39 characters inside
+    # the toolkit's unchanged 240-character limit. Full package identity remains
+    # in the notice row; retain exact license bytes with a bounded stable leaf.
+    if ($name.Length -gt 39) {
+        $digest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Id+'/'+$Version+'/'+$FileName))).ToLowerInvariant()
+        $name=$digest.Substring(0,32)+[IO.Path]::GetExtension($FileName)
+    }
+    if ($name.Length -gt 39 -or [IO.File]::Exists((Join-Path $licensesPath $name))) { throw 'ThirdParty.LicenseNameCollisionOrBound' }
+    return $name
 }
 
 function Test-LicenseTextWithNormalizedLineEndings([string] $ExpectedPath, [string] $ActualPath) {
@@ -152,7 +161,8 @@ foreach ($entry in $packageEntries) {
         $sniLicensePath = $packageLicensePath
     }
     $packageLink = "https://www.nuget.org/packages/$packageId/$packageVersion"
-    $licenseRows.Add("| [$packageId/$packageVersion]($packageLink) | $(ConvertTo-MarkdownCell $copyright) | $(ConvertTo-MarkdownCell "${licenseType}: $packageLicense") | $licenseCell |")
+    $licenseDigest=(Get-FileHash -LiteralPath $licenseDestination -Algorithm SHA256).Hash.ToLowerInvariant()
+    $licenseRows.Add("| [$packageId/$packageVersion]($packageLink) | $(ConvertTo-MarkdownCell $copyright) | $(ConvertTo-MarkdownCell "${licenseType}: $packageLicense") | $licenseCell | $licenseDigest |")
 }
 
 if ($sniPackage) {
@@ -185,8 +195,8 @@ $notice.Add('# Third-Party Notices')
 $notice.Add('')
 $notice.Add('This inventory was generated from this application publish''s `SsrsPortal.deps.json` and the exact restored NuGet package metadata. It describes third-party packages included by this build; none of these components is relicensed under the project AGPL license. Keep this notice and the linked texts with any binary copy.')
 $notice.Add('')
-$notice.Add('| Package and version | Package copyright metadata | Package-declared license | Included license text |')
-$notice.Add('| --- | --- | --- | --- |')
+$notice.Add('| Package and version/source | Package copyright metadata | Package-declared license | Included license text | License SHA-256 |')
+$notice.Add('| --- | --- | --- | --- | --- |')
 foreach ($row in $licenseRows) { $notice.Add($row) }
 $notice.Add('')
 if ($sniPackage) {

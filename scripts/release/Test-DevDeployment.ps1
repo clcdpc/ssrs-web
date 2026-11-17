@@ -231,6 +231,16 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
         Assert-True (-not ($functions -match 'Restore-ClcIisDeployment|Stop-WebAppPool|Start-WebAppPool|Remove-Item|sqlcmd'))
     }
     if ($IsWindows) {
+        Test-Case 'Native bootstrap selection rejects forged ProgramData and SystemDrive before reading authority' {
+            Initialize-SsrsNative
+            $root=Get-SsrsProgramData; $savedData=$env:ProgramData; $savedDrive=$env:SystemDrive
+            try {
+                $env:ProgramData='Z:\forged-program-data'
+                Assert-Fails { Assert-SsrsProgramDataEnvironment $root } 'Ssrs.Prerequisite.ProgramDataEnvironment'
+                $env:ProgramData=$savedData; $env:SystemDrive='Z:'
+                Assert-Fails { Get-SsrsProgramData }
+            } finally { $env:ProgramData=$savedData; $env:SystemDrive=$savedDrive }
+        }
         Test-Case 'Initial handoff protection rejects untrusted owners and write ACEs independent of submitted allowlists' {
             $good=[Security.AccessControl.RawSecurityDescriptor]::new('O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)')
             Assert-SsrsSecurityDescriptor $good
@@ -247,16 +257,16 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
             # Only ACL/OS identity observations are synthetic; native physical
             # pins, stream hashing, exact names and first-execution ordering run.
             function Assert-SsrsAcl([string] $Path,[bool] $Ancestor) {}
-            $authority=Join-Path $script:fixtureProgramData 'CLC/Deployment/host-authorizations'; $root=Join-Path $script:fixtureProgramData 'CLC/Deployment/Bootstrap/ssrs-web'
-            [void][IO.Directory]::CreateDirectory($authority); [void][IO.Directory]::CreateDirectory((Join-Path $root 'CLC.Deployment/Private')); [void][IO.Directory]::CreateDirectory((Join-Path $root 'tools/host'))
+            $authority=Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment/enrollment/authorizations'; $root=Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment/bootstrap'
+            [void][IO.Directory]::CreateDirectory($authority); [void][IO.Directory]::CreateDirectory((Join-Path $root 'Clc.Deployment/Private')); [void][IO.Directory]::CreateDirectory((Join-Path $root 'tools/host'))
             $sentinel=Join-Path $parent 'executed.txt'
-            $payload=@{'CLC.Deployment/CLC.Deployment.psm1'='# inert test module';'CLC.Deployment/Private/Deployment.ps1'='# inert private helper; never loaded';'tools/host/HostEnrollment.Common.ps1'="[IO.File]::WriteAllText('$sentinel','executed')"}
+            $payload=@{'Clc.Deployment/Clc.Deployment.psm1'='# inert test module';'Clc.Deployment/Private/Deployment.ps1'='# inert private helper; never loaded';'tools/host/HostEnrollment.Common.ps1'="[IO.File]::WriteAllText('$sentinel','executed')"}
             $inventory=@(foreach ($name in $payload.Keys) {
                 $path=Join-Path $root $name; [IO.File]::WriteAllText($path,$payload[$name],[Text.UTF8Encoding]::new($false))
                 @{path=$name;length=([IO.FileInfo]$path).Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
             })
             [IO.File]::WriteAllText((Join-Path $root 'source.commit'),('1'*40)); [IO.File]::WriteAllText((Join-Path $root 'distribution.zip'),'inert independently test-pinned distribution')
-            $auth=@{contractFamily='clc-host-enrollment-v1';recordKind='host-enrollment-authorization';schemaVersion=1;authorizationId='fixture-auth';targetId='ssrs-web-dev';bootstrap=@{sourceCommit=('1'*40);inventorySha256=(Get-SsrsInventoryHash $inventory)};hostPolicy=@{activeToolkit=@{distributionSha256=(Get-FileHash -LiteralPath (Join-Path $root 'distribution.zip') -Algorithm SHA256).Hash.ToLowerInvariant()}}}
+            $auth=@{contractFamily='clc-host-enrollment-v1';recordKind='host-enrollment-authorization';schemaVersion=1;authorizationId='fixture-auth';targetId='ssrs-web-dev';enrollmentRoot=(Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment');bootstrap=@{sourceCommit=('1'*40);inventorySha256=(Get-SsrsInventoryHash $inventory)};hostPolicy=@{activeToolkit=@{distributionSha256=(Get-FileHash -LiteralPath (Join-Path $root 'distribution.zip') -Algorithm SHA256).Hash.ToLowerInvariant()}}}
             [IO.File]::WriteAllBytes((Join-Path $authority 'fixture-auth.json'),(Json-Bytes $auth))
             $opened=Open-SsrsBootstrap 'fixture-auth'
             try { Assert-True ($opened.leases.Count -gt 0 -and -not [IO.File]::Exists($sentinel)) } finally { foreach ($lease in $opened.leases) { $lease.Dispose() } }
@@ -264,17 +274,27 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
             [IO.File]::AppendAllText((Join-Path $root 'distribution.zip'),'wrong bytes')
             Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.ApprovedDistributionMismatch'
             [IO.File]::WriteAllText((Join-Path $root 'distribution.zip'),'inert independently test-pinned distribution')
-            $helperPath=Join-Path $root 'CLC.Deployment/Private/Deployment.ps1'
+            $helperPath=Join-Path $root 'Clc.Deployment/Private/Deployment.ps1'
             [IO.File]::AppendAllText($helperPath,'changed')
             Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.BootstrapInventoryMismatch'
-            [IO.File]::WriteAllText($helperPath,$payload['CLC.Deployment/Private/Deployment.ps1'],[Text.UTF8Encoding]::new($false))
-            $foreignPath=Join-Path $root 'CLC.Deployment/Private/Foreign.ps1'
+            [IO.File]::WriteAllText($helperPath,$payload['Clc.Deployment/Private/Deployment.ps1'],[Text.UTF8Encoding]::new($false))
+            $foreignPath=Join-Path $root 'Clc.Deployment/Private/Foreign.ps1'
             [IO.File]::WriteAllText($foreignPath,'unexpected generated file')
             Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.BootstrapInventoryMismatch'
             [IO.File]::Delete($foreignPath)
             [IO.File]::AppendAllText((Join-Path $root 'tools/host/HostEnrollment.Common.ps1'),'# byte drift')
             Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.BootstrapInventoryMismatch'
             Assert-True (-not [IO.File]::Exists($sentinel))
+            [IO.File]::WriteAllText((Join-Path $root 'tools/host/HostEnrollment.Common.ps1'),$payload['tools/host/HostEnrollment.Common.ps1'],[Text.UTF8Encoding]::new($false))
+            foreach ($path in @($helperPath,$root,$authority)) {
+                $ads=$path+':ssrs-test-stream'
+                [IO.File]::WriteAllText($ads,'unapproved stream')
+                try { Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } }
+                finally { [IO.File]::Delete($ads) }
+            }
+            [IO.File]::WriteAllText((Join-Path $root 'distribution.json'),'{}')
+            Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.BootstrapInventoryMismatch'
+            [IO.File]::Delete((Join-Path $root 'distribution.json'))
         }
     }
     Test-Case 'Transport authentication, exact extraction and create-new inbox reuse execute against actual ZIP bytes' {

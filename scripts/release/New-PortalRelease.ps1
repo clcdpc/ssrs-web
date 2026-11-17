@@ -9,6 +9,7 @@ param(
     [string] $ToolkitReadToken,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string] $SourceCommit,
     [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9-]{0,63}$')][string] $ReleaseId,
+    [Parameter(Mandatory)][string] $ReleaseTag,
     [Parameter(Mandatory)][ValidateRange(1,[long]::MaxValue)][long] $RunId,
     [Parameter(Mandatory)][ValidateRange(1,[long]::MaxValue)][long] $RunAttempt,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string] $DependencyLockSha256,
@@ -17,7 +18,8 @@ param(
 . "$PSScriptRoot/Release.Common.ps1"
 $PublishRoot=Assert-ReleasePath $PublishRoot; $OutputDirectory=Assert-ReleasePath $OutputDirectory
 if (-not [IO.Directory]::Exists($OutputDirectory)) { Stop-Release 'Release.OutputParentMissing' }
-Assert-PortalPublish $PublishRoot $ReleaseId $SourceCommit
+$null=Get-SsrsReleaseTag $ReleaseTag
+Assert-PortalPublish $PublishRoot $ReleaseId $SourceCommit $ReleaseTag
 $acquire=@{LockPath=$ToolkitLockPath;Destination=$ToolkitDirectory}
 if ($ToolkitArchivePath) { $acquire.ArchivePath=$ToolkitArchivePath }
 if ($ToolkitReadToken) { $acquire.ReadToken=$ToolkitReadToken }
@@ -26,7 +28,7 @@ Import-Module $builder.moduleManifest -Force
 $metadata=[ordered]@{contractFamily='clc-file-iis-v1';schemaVersion=1;recordKind='release-metadata';applicationId='ssrs-web';releaseId=$ReleaseId;
     source=[ordered]@{repository='clcdpc/ssrs-web';commit=$SourceCommit};
     build=[ordered]@{workflowPath='.github/workflows/release.yml';runId=$RunId;runAttempt=$RunAttempt;job='release';sdkVersion='10.0.303';dependencyLockSha256=$DependencyLockSha256};
-    builder=[ordered]@{module='CLC.Deployment';version=$builder.version;sourceCommit=$builder.sourceCommit;distributionSha256=$builder.distributionSha256};
+    builder=[ordered]@{module='Clc.Deployment';version=$builder.version;sourceCommit=$builder.sourceCommit;distributionSha256=$builder.distributionSha256};
     runtime=[ordered]@{framework='net10.0';rid='win-x64';architecture='x64';hostingModel='inprocess';workerLimit=1};
     changeKind='files-only';validation=[ordered]@{contractVersion=1;entryPoint='SsrsPortal.dll'};readinessContractVersion=1}
 # Metadata must be outside the archive's output directory (toolkit path contract).
@@ -39,7 +41,7 @@ $created=New-ClcRelease -PublishRoot $PublishRoot -MetadataPath $metadataPath -O
 $verified=Test-ClcRelease -ArchivePath $archive
 if (-not $verified.integrityVerified -or $verified.authorizedForDeployment -or $verified.applicationId -cne 'ssrs-web' -or
     $verified.releaseId -cne $ReleaseId -or $verified.sourceCommit -cne $SourceCommit -or $verified.archiveSha256 -cne $created.archiveSha256) { Stop-Release 'Release.ToolkitVerificationMismatch' }
-$null=Assert-PortalReleaseArchive $archive $ReleaseId $SourceCommit
+$null=Assert-PortalReleaseArchive $archive $ReleaseId $SourceCommit $ReleaseTag
 $evidence=[ordered]@{schemaVersion=1;recordKind='ssrs-web-build-evidence';repository='clcdpc/ssrs-web';sourceCommit=$SourceCommit;
     workflowPath='.github/workflows/release.yml';workflowCommit=$WorkflowCommit;runId=$RunId;runAttempt=$RunAttempt;buildJob='release';
     releaseId=$ReleaseId;innerReleaseSha256=$verified.archiveSha256;manifestSha256=$verified.manifestSha256;inventorySha256=$verified.inventorySha256;

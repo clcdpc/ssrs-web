@@ -56,10 +56,54 @@ jobs:
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-ordinary-publish
           dotnet restore src/SsrsPortal/SsrsPortal.csproj --locked-mode --runtime win-x64 -p:ClcIdentityKind=Release
           if ($LASTEXITCODE) { throw 'Release.RestoreFailed' }
-          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcReleaseId=ssrs-web-ci-qualification -p:ClcSourceCommit=1111111111111111111111111111111111111111 -p:ClcIdentityKind=Release --output artifacts/ci-release-publish
+          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcReleaseTag=v1.0.0-dev.1 -p:ClcTargetId=ssrs-web-dev -p:ClcReleaseId=ssrs-web-ci-qualification -p:ClcSourceCommit=1111111111111111111111111111111111111111 -p:ClcIdentityKind=Release --output artifacts/ci-release-publish
           if ($LASTEXITCODE) { throw 'Release.PublishFailed' }
           ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-release-publish
           ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish
+  windows-per-target-integration:
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+      (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: clcdpc/clc-deployment
+          ref: 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d
+          path: artifacts/toolkit-source
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.303
+      - name: Authenticate the test PowerShell and preserve raw reviewed toolkit bytes
+        shell: pwsh
+        run: |
+          ./scripts/release/Get-BuildPowerShell.ps1 -Destination "$env:RUNNER_TEMP/ssrs-per-target-pwsh"
+          git -C artifacts/toolkit-source -c core.autocrlf=false checkout-index --all --force
+          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutFailed' }
+      - name: Qualify candidate packaging and actual application lifecycle with synthetic IIS
+        shell: pwsh
+        run: |
+          $env:PATH="$env:RUNNER_TEMP/ssrs-per-target-pwsh;"+$env:PATH
+          & "$env:RUNNER_TEMP/ssrs-per-target-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Test-DeploymentIntegration.ps1 -ToolkitSourceRoot "$env:GITHUB_WORKSPACE/artifacts/toolkit-source" -ToolkitSourceCommit 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d -BuildInputs
+          if ($LASTEXITCODE) { throw 'Integration.SyntheticQualificationFailed' }
+      - name: Retain bounded synthetic qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: per-target-synthetic-evidence
+          path: |
+            artifacts/deployment-integration/**/results.json
+            artifacts/deployment-integration/**/failure.json
+            artifacts/release-packaging-tests/**/results.json
+          retention-days: 14
+          if-no-files-found: ignore
   mock:
     # Defense in depth. Repository protections must also control untrusted
     # workflow changes; a submitted workflow can change this guard.

@@ -393,5 +393,5 @@ static async Task FailureAsync(HttpContext context, string code, int status, Exc
 
 public partial class Program
 {
-    internal const string ApplicationDirectoryName = "clc-ssrs-web";
+    internal static string ApplicationDirectoryName => ReleaseTarget.ApplicationDirectoryName;
 }

@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:ReleaseRepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+. "$PSScriptRoot/TagRelease.Common.ps1"
 
 function Stop-Release([string] $Code) { throw [IO.InvalidDataException]::new($Code) }
 function Get-ReleaseHash([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -108,11 +109,14 @@ namespace SsrsRelease {
     if ($Bytes.Length -gt 268435456) { Stop-Release 'Release.IdentityBound' }
     [SsrsRelease.Metadata]::Read($Bytes)
 }
-function Assert-CompiledReleaseIdentity($Identity,[string] $ReleaseId,[string] $SourceCommit) {
-    if ($Identity.Count -ne 4 -or $Identity['Clc.ApplicationId'] -cne 'ssrs-web' -or $Identity['Clc.IdentityKind'] -cne 'Release' -or
+function Assert-CompiledReleaseIdentity($Identity,[string] $ReleaseId,[string] $SourceCommit,[string] $ReleaseTag,[string] $TargetId) {
+    if ($Identity.Count -ne 6 -or $Identity['Clc.ApplicationId'] -cne 'ssrs-web' -or $Identity['Clc.IdentityKind'] -cne 'Release' -or
         $Identity['Clc.ReleaseId'] -cne $ReleaseId -or $Identity['Clc.SourceCommit'] -cne $SourceCommit -or
         $ReleaseId -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$' -or $ReleaseId.StartsWith('synthetic-',[StringComparison]::Ordinal) -or
         $SourceCommit -cnotmatch '^[a-f0-9]{40}$' -or $SourceCommit -ceq ('0'*40)) { Stop-Release 'Release.CompiledIdentityMismatch' }
+    $tag=Get-SsrsReleaseTag $Identity['Clc.ReleaseTag']
+    if ($Identity['Clc.TargetId'] -cne $tag.targetId -or ($ReleaseTag -and $tag.tag -cne $ReleaseTag) -or
+        ($TargetId -and $Identity['Clc.TargetId'] -cne $TargetId)) { Stop-Release 'Release.CompiledTargetMismatch' }
 }
 function Assert-PortalContentName([string] $relative) {
         Assert-ReleaseName $relative
@@ -129,13 +133,40 @@ function Get-PortalPublishedAspNetCoreElement([string] $PublishRoot) {
     $path=Join-Path $PublishRoot 'web.config'
     if (-not [IO.File]::Exists($path)) { Stop-Release 'Release.WebConfigMissing' }
     try {
-        $document=[Xml.XmlDocument]::new()
-        $document.XmlResolver=$null
-        $document.Load($path)
+        $document=Read-PortalWebConfig ([IO.File]::ReadAllBytes($path))
         $nodes=$document.SelectNodes('/configuration/location[@path="."]/system.webServer/aspNetCore')
         if ($nodes.Count -ne 1) { Stop-Release 'Release.WebConfigInvalid' }
         return $nodes[0]
     } catch { Stop-Release 'Release.WebConfigInvalid' }
+}
+function Read-PortalWebConfig([byte[]] $Bytes) {
+    if ($Bytes.Length -gt 4194304) { Stop-Release 'Release.WebConfigInvalid' }
+    $settings=[Xml.XmlReaderSettings]::new(); $settings.DtdProcessing=[Xml.DtdProcessing]::Prohibit; $settings.XmlResolver=$null; $settings.MaxCharactersInDocument=4194304
+    $memory=[IO.MemoryStream]::new($Bytes,$false); $reader=[Xml.XmlReader]::Create($memory,$settings)
+    try {
+        $document=[Xml.XmlDocument]::new(); $document.XmlResolver=$null; $document.Load($reader)
+        $expected=@{'configuration'=@{};'configuration/location'=@{path='.';inheritInChildApplications='false'};
+            'configuration/location/system.webServer'=@{};'configuration/location/system.webServer/handlers'=@{};
+            'configuration/location/system.webServer/handlers/add'=@{name='aspNetCore';path='*';verb='*';modules='AspNetCoreModuleV2';resourceType='Unspecified'};
+            'configuration/location/system.webServer/aspNetCore'=@{processPath='dotnet';arguments='.\SsrsPortal.dll';stdoutLogEnabled='false';hostingModel='inprocess';stdoutLogFile='.\logs\stdout';shutdownTimeLimit='60'}}
+        $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($node in $document.SelectNodes('//*')) {
+            $parts=[Collections.Generic.List[string]]::new(); $cursor=$node
+            while ($cursor -is [Xml.XmlElement]) { $parts.Insert(0,$cursor.get_Name()); $cursor=$cursor.get_ParentNode() }
+            $key=$parts -join '/'
+            if ($node.get_NamespaceURI() -or -not $expected.ContainsKey($key) -or -not $seen.Add($key)) { Stop-Release 'Release.WebConfigInvalid' }
+            foreach ($attribute in $node.Attributes) {
+                if (-not $expected[$key].ContainsKey($attribute.Name) -or $expected[$key][$attribute.Name] -cne $attribute.Value) { Stop-Release 'Release.WebConfigInvalid' }
+            }
+            foreach ($name in $expected[$key].Keys) {
+                if ($name -cin @('stdoutLogFile','shutdownTimeLimit')) { continue }
+                if (-not $node.HasAttribute($name)) { Stop-Release 'Release.WebConfigInvalid' }
+            }
+        }
+        if ($seen.Count -ne $expected.Count) { Stop-Release 'Release.WebConfigInvalid' }
+        return ,$document
+    } catch { Stop-Release 'Release.WebConfigInvalid' }
+    finally { $reader.Dispose(); $memory.Dispose() }
 }
 function Assert-OrdinaryPublishShutdownTimeLimit([string] $PublishRoot) {
     $aspNetCore=Get-PortalPublishedAspNetCoreElement $PublishRoot
@@ -150,7 +181,7 @@ function Assert-ReleasePublishShutdownTimeLimit([string] $PublishRoot) {
 function Assert-PortalDependencies($dependencies) {
     if ($dependencies.runtimeTarget.name -cne '.NETCoreApp,Version=v10.0/win-x64' -or @($dependencies.libraries.Keys | Where-Object { $_ -clike 'SsrsPortal.Mock/*' }).Count) { Stop-Release 'Release.RuntimeDependenciesMismatch' }
 }
-function Assert-ThirdPartyNoticeInventory([byte[]] $DependencyBytes,[byte[]] $NoticeBytes,[string[]] $LicenseRelativePaths) {
+function Assert-ThirdPartyNoticeInventory([byte[]] $DependencyBytes,[byte[]] $NoticeBytes,[string[]] $LicenseRelativePaths,$LicenseHashes) {
     $dependencies=Read-ReleaseJson $DependencyBytes
     $notice=[Text.UTF8Encoding]::new($false,$true).GetString($NoticeBytes)
     if ($notice -notmatch '(?m)^# Third-Party Notices$' -or $notice -notmatch 'none of these components is relicensed under the project AGPL license') {
@@ -174,7 +205,9 @@ function Assert-ThirdPartyNoticeInventory([byte[]] $DependencyBytes,[byte[]] $No
         $matchingRows=@($packageRows | Where-Object { $_.StartsWith("| [$label](",[StringComparison]::Ordinal) })
         if ($matchingRows.Count -ne 1) { Stop-Release 'Release.ThirdPartyPackageNoticeMissing' }
         $licenseReference=[regex]::Match($matchingRows[0], '\]\(THIRD-PARTY-LICENSES/([A-Za-z0-9_.-]+)\)')
-        if (-not $licenseReference.Success -or -not $licenseSet.Contains($licenseReference.Groups[1].Value)) { Stop-Release 'Release.ThirdPartyLicenseTextMissing' }
+        $digest=[regex]::Match($matchingRows[0],'\| ([a-f0-9]{64}) \|$')
+        if (-not $licenseReference.Success -or -not $licenseSet.Contains($licenseReference.Groups[1].Value) -or
+            -not $digest.Success -or $digest.Groups[1].Value -cne $LicenseHashes[$licenseReference.Groups[1].Value]) { Stop-Release 'Release.ThirdPartyLicenseTextMissing' }
     }
     $sni=@($packageEntries | Where-Object { $_.Name -ceq 'Microsoft.Data.SqlClient.SNI.runtime/7.1.0' })
     if ($sni.Count -and ($notice -notmatch 'Microsoft.Data.SqlClient.SNI.runtime' -or $notice -notmatch 'Microsoft.Data.SqlClient.SNI.dll' -or $notice -notmatch 'SHA-256')) {
@@ -184,7 +217,7 @@ function Assert-ThirdPartyNoticeInventory([byte[]] $DependencyBytes,[byte[]] $No
     if ($hangfire.Count -and (-not $licenseSet.Contains('Hangfire-1.8.25-COPYING') -or -not $licenseSet.Contains('Hangfire-1.8.25-COPYING.LESSER') -or
         $notice -notmatch 'vendored Hangfire SQL installer')) { Stop-Release 'Release.HangfireLicenseNoticeMissing' }
 }
-function Assert-PortalPublish([string] $PublishRoot,[string] $ReleaseId,[string] $SourceCommit) {
+function Assert-PortalPublish([string] $PublishRoot,[string] $ReleaseId,[string] $SourceCommit,[string] $ReleaseTag) {
     $PublishRoot=Assert-ReleasePath $PublishRoot
     $files=@(Get-ChildItem -LiteralPath $PublishRoot -Recurse -File -Force)
     if (-not $files.Count) { Stop-Release 'Release.EmptyPublish' }
@@ -193,7 +226,7 @@ function Assert-PortalPublish([string] $PublishRoot,[string] $ReleaseId,[string]
         $null=Assert-ReleasePath $file.FullName
     }
     $dll=Join-Path $PublishRoot 'SsrsPortal.dll'
-    Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity ([IO.File]::ReadAllBytes($dll))) $ReleaseId $SourceCommit
+    Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity ([IO.File]::ReadAllBytes($dll))) $ReleaseId $SourceCommit $ReleaseTag
     $dependenciesBytes=[IO.File]::ReadAllBytes((Join-Path $PublishRoot 'SsrsPortal.deps.json'))
     $dependencies=Read-ReleaseJson $dependenciesBytes
     Assert-PortalDependencies $dependencies
@@ -209,11 +242,12 @@ function Assert-PortalPublish([string] $PublishRoot,[string] $ReleaseId,[string]
     $noticePath=Join-Path $PublishRoot 'THIRD-PARTY-NOTICES.md'; $licensesPath=Join-Path $PublishRoot 'THIRD-PARTY-LICENSES'
     if (-not [IO.File]::Exists($noticePath) -or -not [IO.Directory]::Exists($licensesPath)) { Stop-Release 'Release.ThirdPartyNoticeMissing' }
     $licensePaths=@(Get-ChildItem -LiteralPath $licensesPath -Recurse -File | ForEach-Object { [IO.Path]::GetRelativePath($PublishRoot,$_.FullName).Replace('\','/') })
-    Assert-ThirdPartyNoticeInventory $dependenciesBytes ([IO.File]::ReadAllBytes($noticePath)) $licensePaths
+    $licenseHashes=@{}; foreach ($path in $licensePaths) { $licenseHashes[$path.Substring('THIRD-PARTY-LICENSES/'.Length)]=Get-ReleaseHash (Join-Path $PublishRoot $path) }
+    Assert-ThirdPartyNoticeInventory $dependenciesBytes ([IO.File]::ReadAllBytes($noticePath)) $licensePaths $licenseHashes
     # Shared toolkit performs authoritative XML/runtime/ZIP inventory validation.
     Assert-ReleasePublishShutdownTimeLimit $PublishRoot
 }
-function Assert-PortalReleaseArchive([string] $ArchivePath,[string] $ReleaseId,[string] $SourceCommit) {
+function Assert-PortalReleaseArchive([string] $ArchivePath,[string] $ReleaseId,[string] $SourceCommit,[string] $ReleaseTag) {
     $zip=[IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
         $manifestEntries=@($zip.Entries | Where-Object FullName -CEQ 'manifest.json')
@@ -228,7 +262,9 @@ function Assert-PortalReleaseArchive([string] $ArchivePath,[string] $ReleaseId,[
             $manifest.runtime.rid -cne 'win-x64' -or $manifest.runtime.architecture -cne 'x64' -or
             $manifest.runtime.hostingModel -cne 'inprocess' -or $manifest.runtime.workerLimit -ne 1 -or
             $manifest.validation.entryPoint -cne 'SsrsPortal.dll' -or $manifest.validation.contractVersion -ne 1 -or $manifest.readinessContractVersion -ne 1) { Stop-Release 'Release.ManifestMismatch' }
-        Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry $dllEntries[0])) $ReleaseId $SourceCommit
+        Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry $dllEntries[0])) $ReleaseId $SourceCommit $ReleaseTag
+        $web=Read-PortalWebConfig (Read-ReleaseEntry ($zip.GetEntry('application/web.config')) 4194304)
+        if ($web.SelectSingleNode('//aspNetCore').HasAttribute('shutdownTimeLimit')) { Stop-Release 'Release.ToolkitWebConfigShutdownAttributeForbidden' }
         $dependencyBytes=Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.deps.json')) 4194304
         Assert-PortalDependencies (Read-ReleaseJson $dependencyBytes)
         foreach ($name in @('LICENSE','COPYRIGHT.md','BINARY-DISTRIBUTION-NOTICE.md')) {
@@ -244,7 +280,8 @@ function Assert-PortalReleaseArchive([string] $ArchivePath,[string] $ReleaseId,[
         $licenseEntries=@($zip.Entries | Where-Object { $_.FullName.StartsWith('application/THIRD-PARTY-LICENSES/',[StringComparison]::Ordinal) })
         if ($null -eq $noticeEntry -or -not $licenseEntries.Count -or @($licenseEntries | Where-Object { $_.Length -le 0 }).Count) { Stop-Release 'Release.ThirdPartyNoticeMissing' }
         $licensePaths=@($licenseEntries | ForEach-Object { $_.FullName.Substring('application/'.Length) })
-        Assert-ThirdPartyNoticeInventory $dependencyBytes (Read-ReleaseEntry $noticeEntry) $licensePaths
+        $licenseHashes=@{}; foreach ($entry in $licenseEntries) { $licenseHashes[$entry.FullName.Substring('application/THIRD-PARTY-LICENSES/'.Length)]=Get-ReleaseBytesHash (Read-ReleaseEntry $entry) }
+        Assert-ThirdPartyNoticeInventory $dependencyBytes (Read-ReleaseEntry $noticeEntry) $licensePaths $licenseHashes
         return $manifest
     } finally { $zip.Dispose() }
 }

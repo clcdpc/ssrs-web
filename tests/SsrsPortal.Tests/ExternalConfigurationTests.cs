@@ -109,10 +109,20 @@ public sealed class ExternalConfigurationTests
             var spoofedProgramData = Path.Combine(missingDirectory, "spoofed-programdata");
             start.Environment["ProgramData"] = spoofedProgramData;
             var spoofed = await RunCommand(start, "--clc-appdata-directory");
-            Assert.Equal(0, spoofed.ExitCode);
-            Assert.Equal(paths.ApplicationDataDirectory + Environment.NewLine, spoofed.StandardOutput);
-            Assert.Empty(spoofed.StandardError);
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Equal(1, spoofed.ExitCode);
+                Assert.Empty(spoofed.StandardOutput);
+                Assert.Contains("Unable to resolve the application's CommonApplicationData directory.", spoofed.StandardError);
+            }
+            else
+            {
+                Assert.Equal(0, spoofed.ExitCode);
+                Assert.Equal(paths.ApplicationDataDirectory + Environment.NewLine, spoofed.StandardOutput);
+                Assert.Empty(spoofed.StandardError);
+            }
             Assert.False(Directory.Exists(spoofedProgramData));
+            start.Environment.Remove("ProgramData");
 
             if (OperatingSystem.IsWindows())
             {

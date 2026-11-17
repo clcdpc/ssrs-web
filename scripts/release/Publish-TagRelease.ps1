@@ -20,7 +20,7 @@ try {
     $manifest=Read-ReleaseJson (Read-ReleaseEntry ($zip.GetEntry('manifest.json')) 4194304)
     if ($manifest.build.workflowPath -cne '.github/workflows/release.yml' -or $manifest.build.job -cne 'release' -or
         $manifest.build.runId -ne $release.run.id -or $manifest.build.runAttempt -ne $release.run.run_attempt) { Stop-TagRelease 'ArchivePackageMismatch' }
-    Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.dll')))) $p.releaseId $release.sourceCommit
+    Assert-CompiledReleaseIdentity (Read-CompiledReleaseIdentity (Read-ReleaseEntry ($zip.GetEntry('application/SsrsPortal.dll')))) $p.releaseId $release.sourceCommit $release.tag
 } finally { $zip.Dispose() }
 $publication=Publish-SsrsCanonicalRelease $release (Join-Path $directory 'publication')
 $publication | ConvertTo-Json -Compress | Write-Output

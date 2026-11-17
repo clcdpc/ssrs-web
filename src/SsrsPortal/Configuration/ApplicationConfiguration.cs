@@ -24,6 +24,7 @@ internal sealed record ApplicationConfiguration(PortalOptions Portal, CatalogMon
         var keys = ExternalConfigurationLoader.Bind<PersistentKeyOptions>(configuration, "DataProtection", !development);
         if (!development || configuration.GetSection("Deployment").Exists()) { deployment.Validate(); }
         if (!development || configuration.GetSection("DataProtection").Exists()) { keys.Validate(); }
+        ReleaseTarget.ValidateKeyRoot(keys.KeyRingPath);
         return new(portal, monitor, entra, subscriptions, deployment, keys);
     }
 }
