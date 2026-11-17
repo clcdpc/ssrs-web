@@ -162,6 +162,7 @@ function Invoke-BridgeReadiness {
 }
 function New-BridgeFixture {
     $fixture=New-T2Fixture
+    Assert-Bridge ([IO.Path]::GetPathRoot($fixture.workspace).Equals([IO.Path]::GetPathRoot($conventionalRoot),[StringComparison]::OrdinalIgnoreCase)) 'fixture workspace is on the owned canonical target volume'
     $oldTarget=Join-Path $fixture.layout.targetCatalogRoot ($fixture.target.targetId+'.json')
     [IO.File]::Delete($oldTarget)
     $priorRoot=$fixture.layout.targetRoot
@@ -302,7 +303,7 @@ try {
     $markerName='synthetic-bridge-owner-'+[Guid]::NewGuid().ToString('N')+'.txt'
     [IO.File]::WriteAllText((Join-Path $conventionalRoot $markerName),'synthetic-unapproved-qualification')
     foreach ($name in @('Config','Keys')) { [void][IO.Directory]::CreateDirectory((Join-Path $conventionalRoot $name)) }
-    # Short, exclusively owned Temp avoids the unchanged toolkit path budgets.
+    # Keep auxiliary bootstrap observations in an exclusively owned runner folder.
     $temporaryParent=if ($env:RUNNER_TEMP) {$env:RUNNER_TEMP} else {[IO.Path]::GetTempPath()}
     $shortRoot=Join-Path $temporaryParent ('ssrs-b-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
     if ([IO.Directory]::Exists($shortRoot) -or [IO.File]::Exists($shortRoot)) { throw 'Short synthetic root collision.' }
@@ -310,7 +311,12 @@ try {
     $acl=Get-Acl -LiteralPath $shortRoot
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
     Set-Acl -LiteralPath $shortRoot -AclObject $acl
-    $env:TEMP=$shortRoot; $env:TMP=$shortRoot
+    # New-T2Fixture must start on the canonical target volume. Hosted Windows
+    # runners may place RUNNER_TEMP on D: while native ProgramData remains on C:.
+    # The conventional root above is exclusively create-new and marker-owned.
+    # SSRS-BRIDGE-TEMP-BEGIN
+    $env:TEMP=$conventionalRoot; $env:TMP=$conventionalRoot
+    # SSRS-BRIDGE-TEMP-END
     Remove-Module Clc.Deployment -Force -ErrorAction SilentlyContinue
     . (Join-Path $toolkit 'tests/Support.ps1')
     . (Join-Path $toolkit 'tests/T2Support.ps1')

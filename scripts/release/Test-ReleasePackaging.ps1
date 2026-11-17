@@ -241,6 +241,32 @@ try {
         [IO.File]::AppendAllText($readme,"unreviewed change`n",[Text.UTF8Encoding]::new($false))
         Assert-Fails { Assert-ExactSourceBytes -RepositoryRoot $fixture -Commit $commit } 'ExactSource.WorkingTreeBlobMismatch'
     }
+    if ($IsWindows) {
+        Test-Case 'Canonical fixture temporary state ignores a runner TEMP on another volume' {
+            $conventionalRoot=Join-Path $work 'owned-canonical-fixture'; [void][IO.Directory]::CreateDirectory($conventionalRoot)
+            $otherDrive=if ([IO.Path]::GetPathRoot($conventionalRoot) -ieq 'C:\') {'D:\'} else {'C:\'}
+            $shortRoot=$otherDrive+'synthetic-runner-temp-not-accessed'
+            $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Test-DeploymentIntegration.ps1'))
+            $selection=[regex]::Match($source,'(?s)# SSRS-BRIDGE-TEMP-BEGIN\r?\n(?<body>.*?)# SSRS-BRIDGE-TEMP-END')
+            Assert-True $selection.Success
+            $savedTemp=$env:TEMP; $savedTmp=$env:TMP
+            try {
+                $env:TEMP=$shortRoot; $env:TMP=$shortRoot
+                $null=& ([scriptblock]::Create($selection.Groups['body'].Value))
+                $temporary=[IO.Path]::GetTempPath().TrimEnd('\')
+                Assert-True ($temporary -ceq $conventionalRoot -and [IO.Path]::GetPathRoot($temporary) -ine [IO.Path]::GetPathRoot($shortRoot))
+                $ownedSource=Join-Path $temporary 'clc-fixture\Deployment'; [void][IO.Directory]::CreateDirectory($ownedSource)
+                $payload=Join-Path $ownedSource 'source.commit'; [IO.File]::WriteAllText($payload,('1'*40))
+                $expectedHash=Get-ReleaseHash $payload
+                $destination=Join-Path $conventionalRoot 'Deployment'
+                [IO.Directory]::Move($ownedSource,$destination)
+                Assert-True (-not [IO.Directory]::Exists($ownedSource) -and (Get-ReleaseHash (Join-Path $destination 'source.commit')) -ceq $expectedHash)
+                [void][IO.Directory]::CreateDirectory($ownedSource)
+                Assert-Fails { [IO.Directory]::Move($ownedSource,$destination) }
+                Assert-True ([IO.Directory]::Exists($ownedSource) -and (Get-ReleaseHash (Join-Path $destination 'source.commit')) -ceq $expectedHash)
+            } finally { $env:TEMP=$savedTemp; $env:TMP=$savedTmp }
+        }
+    }
     Test-Case 'Wrong whole-archive pin cannot execute its bundled self-verifier' {
         $sentinel=Join-Path $work 'must-not-exist.txt'; $evil=Join-Path $work 'untrusted.zip'
         New-TestZip $evil @{'tools/Test-ToolkitDistribution.ps1'="[IO.File]::WriteAllText('$sentinel','executed')"}
