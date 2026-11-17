@@ -1,6 +1,6 @@
 # CLC deployment integration
 
-The general [CLC Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/setup-guide.md) is the architectural authority for tag-driven releases. This runbook supplies the detailed SSRS-specific implementation and acceptance procedures. The guide revision, build-time [toolkit lock](../deployment/toolkit.lock.json) and independently installed host runtime are separate dependencies.
+The general [CLC Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) is the architectural authority for tag-driven releases. This runbook supplies the detailed SSRS-specific implementation and acceptance procedures. The current guide, build-time [toolkit lock](../deployment/toolkit.lock.json) and independently installed host runtime are separate dependencies.
 
 ## Qualification status
 
@@ -88,7 +88,7 @@ DEV and production have separate target concurrency groups with `cancel-in-progr
 
 ### GitHub and host configuration prerequisites
 
-Provision these once through separate repository/infrastructure administration, following the [Setup Guide](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/setup-guide.md):
+Provision these once through separate repository/infrastructure administration, following the [Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md):
 
 1. In **Repository Settings > Actions > Policies**, create an **Active Restrict actors** policy covering **all repository workflows**, selecting the authorized release developers/automation. Review effective organization/enterprise policy too. This native execution policy does not grant tag-creation permission.
 2. In **Repository Settings > Rules > Rulesets**, create **two Active tag rulesets**, both matching **`v*`**:
@@ -103,7 +103,7 @@ Provision these once through separate repository/infrastructure administration, 
 4. Separately enable **Repository Settings > General > Releases > Release immutability** **before publication** (or verify owner-enforced immutability). Tag rulesets alone do not establish immutable Release assets; canonical Releases must report Boolean `immutable: true` as described above.
 5. Create **ssrs-web-dev** and **ssrs-web-production** environments. For **both**, set **Deployment branches and tags: No restriction**, with **no required reviewers, wait timers or additional deployment protection gates**.
 6. Register dedicated **Windows x64 self-hosted** deployment runners. **Repository-scoped runners are preferred**, with labels `self-hosted`, `Windows`, `X64` and the derived target ID. They require no runner group or protected-master workflow allowlist. **Organization-scoped runners are an alternative** when their group grants this repository access. Build/test/archive stay on GitHub-hosted Windows; ordinary Linux/browser CI stays on GitHub-hosted Ubuntu with its existing trusted-contributor admission.
-7. Independently authenticate/install a [compatible runtime toolkit](#toolkit-integration-and-host-trust), provision protected host configuration/target identity and host authorization named `<target-id>`, then complete [enrollment and the separately approved initial baseline](#initial-cutover-baseline-and-exceptional-recovery). **Only after the baseline succeeds**, provision enabled target-scoped [standing authorization](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/automated-deployments.md) named `<target-id>`, bound to this repository, `release.yml`/`release`, channel, target and lineage. DEV policy must permit unmerged DEV tags.
+7. Independently authenticate/install a [compatible runtime toolkit](#toolkit-integration-and-host-trust), provision protected host configuration/target identity and host authorization named `<target-id>`, then complete [enrollment and the separately approved initial baseline](#initial-cutover-baseline-and-exceptional-recovery). **Only after the baseline succeeds**, provision enabled target-scoped [standing authorization](https://github.com/clcdpc/clc-deployment/blob/master/docs/automated-deployments.md) named `<target-id>`, bound to this repository, `release.yml`/`release`, channel, target and lineage. DEV policy must permit unmerged DEV tags.
 
 Naming grants no authority: missing, invalid or revoked host/standing authorization prevents deployment. Standing authorization persists until changed or revoked; it is not another human approval for every version tag. No deployment activation flags, per-PR configuration, manual release dispatch, recurring GitHub changes or extra actor database are required. The optional read-only host diagnostic has its own separate opt-in, never used by release jobs. This implementation changes no live GitHub settings or infrastructure.
 
@@ -134,7 +134,7 @@ The diagnostic runs manually from protected master with the separate `SSRS_DEV_D
 
 ## SSRS-specific DEV preflight
 
-Use the Setup Guide's [installation](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/installation.md), [enrollment](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/host-enrollment.md), [deployment/recovery](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/57e30ccf3bbbb1005b18123fec9c07308602c0ba/docs/iis-verification.md) instructions alongside this checklist. Execute host commands using the exact independently authenticated installed runtime and its matching contracts, not merely the build-time lock.
+Use the Setup Guide's [installation](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md), [enrollment](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md), [deployment/recovery](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/master/docs/iis-verification.md) instructions alongside this checklist. Execute host commands using the exact independently authenticated installed runtime and its matching contracts, not merely the build-time lock.
 
 `Get-ClcHostEnrollment` and `Initialize-ClcHostEnrollment -Operation Plan` are read-only. `Ready` skips initialization; `ToolkitNotInitialized` or `TargetNotEnrolled` requires separate exact setup authorization. `Incomplete`, `DriftDetected` or `RecoveryRequired` stops for reconciliation, not Apply-based repair. Enrollment readiness does not prove application approval, settings or readiness.
 
