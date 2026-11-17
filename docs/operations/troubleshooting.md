@@ -10,7 +10,7 @@ Repeat Windows packaging with actual CLC Release publish output and `scripts/rel
 
 ## Persistent file logging
 
-`Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. Each caller-owned logging instance stays alive through host shutdown and disposal; concurrent test hosts cannot reconfigure or stop each other. ssrs-web owns `SafeLogLayout`, its output-boundary sanitizer, and explicitly removes default providers so normal events have one sanitized NLog path. Unrelated providers would need their own output policy. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
+`Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. ssrs-web owns the SafeLogLayout output sanitizer and registers one configured NLog path. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
 Released DEV logs use `%ProgramData%\clc-ssrs-web-dev\Logs\`, and stable Production logs use `%ProgramData%\clc-ssrs-web-production\Logs\`. Native Windows known-folder verification and compiled tag/target metadata select the root; local Synthetic development retains `clc-ssrs-web`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
 
@@ -39,44 +39,31 @@ Before external configuration finishes loading, bootstrap and startup failures g
 
 Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOverlappingRotation=true`). The old worker must drain and close files before its replacement writes. Allow shutdown time for request/background-service draining and log flush. Recycling invalidates in-memory report sessions. Web gardens, overlapping workers and farms require coordinated file targeting/retention and distributed sessions before use. NLog's core file target supports one writer here.
 
-### Initial NTFS provisioning
-
-Run this reviewed initial setup example in elevated PowerShell on Windows Server 2022. Supply the actual dedicated regular AD service account; runtime needs no local administrator membership. For existing directories, inspect effective permissions and preserve approved administrative entries instead of blindly replacing ACLs. Also follow [external configuration provisioning](README.md#external-configuration-provisioning).
-
-```powershell
-$applicationRoot = (& dotnet .\SsrsPortal.dll --clc-appdata-directory).Trim()
-if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($applicationRoot)) { throw 'Compiled target discovery failed.' }
-$serviceAccount = Read-Host 'Dedicated IIS application pool identity (DOMAIN\account)'
-$serviceSid = ([Security.Principal.NTAccount]::new($serviceAccount)).Translate([Security.Principal.SecurityIdentifier])
-$administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
-$system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
-foreach ($entry in @(@{ Name = 'Config'; Rights = 'ReadAndExecute' }, @{ Name = 'Logs'; Rights = 'Modify' })) {
-    $directory = Join-Path $applicationRoot $entry.Name
-    New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    $acl = [Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($administrator in @($administrators, $system)) {
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-            $administrator, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-    }
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-        $serviceSid, $entry.Rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-    Set-Acl -LiteralPath $directory -AclObject $acl
-    Get-Acl -LiteralPath $directory | Format-List
-}
-```
-
-The service gets Config read/traverse and Logs Modify, including create/write/append and deletion for rollover/expired-file cleanup. Administrators/SYSTEM retain management access. Check parent traversal and existing child-file inheritance under the actual service identity. Do not grant broad Users/Everyone access or service write access across the application root. Administrators apply these grants; application startup never sets ACLs.
-
 ### Startup troubleshooting and deployment
 
-Normal delivery uses one [tag-push workflow with ordered release/archive/deploy jobs](../clc-deployment.md#tag-driven-automatic-deployment). A permitted tag push selects the exact implementation; deployment follows successful immutable publication and requires independently provisioned host standing authorization. For commissioning or host failures, follow the authoritative [Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) and [SSRS-specific prerequisites](../clc-deployment.md#github-and-host-configuration-prerequisites). The [optional read-only diagnostic](../clc-deployment.md#read-only-deployment-prerequisite-validation) uses the current GET-only GitHub setup checker and never accesses the host or gates deployment. Compatible runtime provisioning, enrollment and a separately approved baseline precede standing authorization; exceptional recovery remains separate administration.
+For initial setup follow [the devweb commissioning procedure](../clc-deployment.md); the [optional GitHub diagnostic](../../.github/workflows/diagnose-deployment.yml) is read-only, never accesses hosts and does not gate deployment. For exact release/rerun behavior see the [release reference](README.md#release-and-toolkit-reference).
 
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
 The [CLC deployment runbook](../clc-deployment.md) preserves Config and Logs outside the managed release, with Config read-only and Logs write/modify access for runtime. The single worker drains without overlapping recycle. Deployment neither packages configuration/logs nor changes their ACLs.
 
-The consumer preflight checks that the physical Logs path is disjoint from the application and protected roots; it does not inspect or grant the runtime account's effective NTFS rights. Pre-create Logs and verify Modify access, including create/append/rollover/retention, under the actual pool identity. Do not grant that identity write access to the ProgramData application parent, Config or toolkit control state. Separately grant the runtime account read/write access to its dedicated [Data Protection key directory](../clc-deployment.md#application-compatibility) for key creation and rotation. These live ACL checks remain **NOT RUN** until confirmed on the DEV host.
+The consumer preflight checks that the physical Logs path is disjoint from the application and protected roots; it does not inspect or grant the runtime account's effective NTFS rights. Pre-create Logs and verify Modify access, including create/append/rollover/retention, under the actual pool identity. Do not grant that identity write access to the ProgramData application parent, Config or toolkit control state. Separately grant the runtime account read/write access to its dedicated [Data Protection key directory](README.md#persistent-data-protection-keys) for key creation and rotation. These live ACL checks remain **NOT RUN** until confirmed on the DEV host.
+
+## Deployment failure and explicit recovery
+
+Use upstream [failure behavior](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#failure-behavior) and [operator recovery](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#operator-procedure) with the exact independently authenticated active runtime for `ssrs-web-dev`. Freeze competing IIS/configuration/filesystem/deployment changes. Preserve Application, protected current/journal/attempts, approvals, original packages, verified manifests/staging/backups/indexes, configuration, keys and actual pool/worker observations. Prove exact helper processes exited. Unknown lifetime, partial installation or corrupt/unverifiable state requires independent maintenance, not a normal retry.
+
+Recover only the **latest failed attempt**, using the independently approved compatible configuration and selected release/backup. In a fresh approved PowerShell process:
+
+```powershell
+Import-Module $independentlyVerifiedActiveManifest
+Restore-ClcIisDeployment -TargetId ssrs-web-dev -AttemptId $latestFailedAttemptId `
+    -Mode RestorePrevious -Reason $nonsecretIncidentReference -RecoveryApprovalId $independentExactApproval
+```
+
+For an automatically admitted recovery release, RecoveryApprovalId must select a separately authored enabled **schema-1** exact approval matching release/target/source/lineage/provenance/hashes, even if standing policy is revoked. Existing manually approved releases retain their normal recovery authority. AcceptCandidate and RestoreEmpty have separate admissibility requirements; neither is an automatic fallback. Never delete journals/locks/intents, edit state to Completed, fabricate approvals, blindly retry mutation, restart legacy code or assume reboot made recovery safe. Verify exact readiness/inventory and durable terminal state after recovery; preserve original evidence. File restoration does not roll back SQL, deliveries, configuration, keys or profiles.
+
+**Reboot limitation:** no activation fence/startup hook prevents WAS starting mixed files if a reboot/external activation interrupts replacement. Ordinary replacement/startup/readiness failure attempts a bounded stop and retains evidence; actual Stopped/zero workers must be observed, otherwise report uncertainty. Accept this operational limitation before enabling deployment. A legacy cutover backup is not prior toolkit-approved release history; restoring legacy files is separately authorized maintenance.
 
 ### Live IIS acceptance
 

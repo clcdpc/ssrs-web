@@ -6,7 +6,7 @@ Staff in approved Microsoft Entra tenants need the `ReportViewer` role. Everyone
 
 Optional [subscriptions](docs/operations/subscriptions.md) use SQL Server, Hangfire, and Postmark without archiving output. The optional read-only [SQL monitor](docs/operations/catalog-monitor.md) refreshes catalog metadata; it never grants access.
 
-[Logging](docs/operations/troubleshooting.md#persistent-file-logging) uses Clc.Logging for NLog infrastructure and application-owned SafeLogLayout sanitization. Bootstrap is stderr-only; configured startup verifies an actual persistent write before serving requests. Existing `ssrs-web-yyyy-MM-dd.log` filenames, 50 MiB rollover and 30-day retention remain. Remove legacy `Logging:File:Rotation` from deployed configuration before upgrading; daily rotation is automatic, and optional `MaxArchiveFiles` defaults to the historical unlimited count when omitted.
+For DEV host commissioning, start with [the six-phase devweb procedure](docs/clc-deployment.md). Use [operations](docs/operations/README.md) for application configuration/Entra/keys and [troubleshooting](docs/operations/troubleshooting.md) for logging and recovery.
 
 ## Verification
 
@@ -55,15 +55,13 @@ git tag v1.2.3-dev.4
 git push origin v1.2.3-dev.4
 ```
 
-The permitted tag push is the release decision. The [tag workflow](.github/workflows/release.yml) automatically builds/tests, publishes the immutable canonical GitHub Release, then deploys through independently installed Clc.Deployment standing authorization. DEV may select unmerged application, workflow, deployment-script and application-owned configuration changes without PR admission or master-file equality. Stable `vMAJOR.MINOR.PATCH` tags require a commit contained in protected master history, including older ancestors, and select `ssrs-web-production`; DEV selects `ssrs-web-dev`. DEV and stable builds compile their fixed `clc-ssrs-web-dev` and `clc-ssrs-web-production` ProgramData roots. Beta/RC tags publish artifacts without a runnable target namespace. Published `Clc.Deployment` `0.1.0-beta.4` is independently pinned for format-3 build-time packaging; its upstream GitHub Release reports `immutable=false`, so the exact archive digest remains the execution trust boundary. The ASP.NET Core companion stays pinned to beta.3. Hosted build/archive success is required before dedicated Windows host deployment; the build pin grants no host installation, activation or deployment authority.
+The [existing tag workflow](.github/workflows/release.yml) builds/tests, publishes an immutable canonical GitHub Release, then deploys automatically under independently provisioned host standing authorization. DEV may select unmerged workflow/script/application changes without PR admission; stable tags require protected master ancestry and select the separately commissioned Production target. Beta/RC publish artifacts only.
 
-One-time setup requires repository-wide Restrict actors, two active `v*` tag rulesets (creation with the release team's Always allow bypass; updates/deletions without routine creator bypass), protected master with existing CI checks, and Release immutability enabled before publication. The derived environments use No restriction with no reviewers, wait timers or extra gates; repository-scoped deployment runners are preferred. See the detailed [GitHub/host prerequisites](docs/clc-deployment.md#github-and-host-configuration-prerequisites) and authoritative guide linked there.
-
-Complete independent compatible-runtime installation, host enrollment and a separately approved initial baseline **before** enabling standing authorization. Routine tags then require no manual approval, deployment-routing/activation variables or per-PR exceptions. For a fresh same-tag build, rerun all jobs of the original push run; canonical assets remain unchanged and run/attempt identity distinguishes the new package. External setup evidence, compatible runtime provisioning, live DEV acceptance and Production qualification remain outstanding; follow the [acceptance procedures](docs/clc-deployment.md#planned-dev-and-production-tag-acceptance).
+Complete [DEV commissioning](docs/clc-deployment.md) through independently approved enrollment and baseline **before** enabling standing authorization. Routine releases then need only a permitted tag push. See the [release reference](docs/operations/README.md#release-and-toolkit-reference) for tag bounds, toolkit pins, artifacts and same-tag reruns, and [separate live acceptance](docs/clc-deployment.md#separate-dev-acceptance) for outstanding qualification. No GitHub/host settings are provisioned by changing these documents.
 
 ## Run against DEV SSRS
 
-1. On Windows, use the published `SsrsPortal.dll --clc-appdata-directory` command to print the application data root. A normal first run under a permitted setup identity copies the published [example](src/SsrsPortal/application.Example.json) to missing `Config\application.json` and stops for editing. Follow [configuration provisioning](docs/operations/README.md#external-configuration-provisioning); replace every `REPLACE_ME`, preserve any existing file and restrict NTFS access to its credentials. Discovery and deployment preflight remain read-only.
+1. For local Synthetic development on Windows, follow [configuration provisioning](docs/operations/README.md#external-configuration-provisioning). Its root is `clc-ssrs-web`; released DEV uses `clc-ssrs-web-dev` and requires the commissioning procedure. Preserve existing files and protect credentials.
 2. Set the HTTPS `/ReportServer` URL, roots/exclusions, Entra client ID/secret, and approved tenants. The process's Windows identity needs SSRS access.
 3. Allow `https://localhost:7443/signin-oidc` in Entra and assign staff the exact `ReportViewer` role. See [Entra setup](docs/operations/README.md#multi-tenant-entra-onboarding-and-global-catalog-policy).
 4. Start the portal:
@@ -81,7 +79,7 @@ Subscriptions are disabled by default. Follow [local subscription setup](docs/op
 
 - [Operations](docs/operations/README.md) and [troubleshooting](docs/operations/troubleshooting.md): configuration, IIS, Entra, logs, and diagnostics.
 - [Report workspace](docs/behavior/report-workspace.md), [expand/collapse](docs/behavior/report-expand-collapse.md), and [branding](docs/behavior/ssrs-branding.md): current behavior and limits.
-- [Deployment](docs/clc-deployment.md): releases, recovery, qualification status, and outstanding host checks; [manual prerequisite diagnostics](docs/clc-deployment.md#read-only-deployment-prerequisite-validation).
+- [DEV commissioning](docs/clc-deployment.md): GitHub, devweb, configuration, enrollment, baseline and unattended tags; [optional diagnostic](.github/workflows/diagnose-deployment.yml).
 - [SOAP and renderer fixtures](tests/SsrsPortal.Tests/Fixtures/README.md): protocol expectations and synthetic coverage.
 
 ## Live acceptance

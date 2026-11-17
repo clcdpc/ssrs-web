@@ -1,32 +1,36 @@
 # Windows Server 2022 / IIS operations
 
-These instructions describe host setup and live acceptance; they do not prove deployment. Only authorized operators may perform administrator, directory, Entra and live SSRS actions.
+This is the application administration and configuration reference. Commission DEV using [the six-phase devweb procedure](../clc-deployment.md); use [troubleshooting and recovery](troubleshooting.md) for failures. Only authorized operators may perform host, directory, Entra and live SSRS actions.
 
-- [Host setup](#host-setup), [configuration](#external-configuration-provisioning), [Entra and catalog policy](#multi-tenant-entra-onboarding-and-global-catalog-policy), and [live gates](#live-gate-checklist) are below.
-- [Troubleshooting](troubleshooting.md) covers logs, NTFS provisioning and SSRS diagnostics.
-- [SQL catalog monitor](catalog-monitor.md) covers optional read-only change detection.
-- [Subscriptions](subscriptions.md) covers scheduled delivery, recovery and acceptance.
-- The [CLC deployment runbook](../clc-deployment.md) covers release identity, validation, configuration revisions, persistent keys and recovery.
-- Follow the authoritative [Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) and SSRS-specific [GitHub/host prerequisites](../clc-deployment.md#github-and-host-configuration-prerequisites) for commissioning: native Restrict actors, separate creation/immutability tag rulesets, protected master, immutable Releases, unrestricted environments and dedicated Windows runners (repository-scoped preferred). The [optional read-only prerequisite diagnostic](../clc-deployment.md#read-only-deployment-prerequisite-validation) uses the current GET-only GitHub setup checker; it does not access hosts, provision infrastructure or authorize deployment.
-- The runbook's [SSRS-specific DEV preflight](../clc-deployment.md#ssrs-specific-dev-preflight) and [seven-check pilot](../clc-deployment.md#planned-real-dev-seven-check-pilot) record application gates that generic toolkit enrollment does not establish.
-- [Tag-driven release operations](../clc-deployment.md#tag-driven-automatic-deployment) covers automatic hosted build/test/archive and dedicated host deployment, including unmerged DEV workflow/script/configuration changes; Production requires protected master ancestry, not HEAD equality. The tag channel derives target/environment/runner/authorization IDs without routing variables. Independently install the compatible runtime and complete host enrollment and the approved initial baseline **before** enabling standing authorization. Routine operation is tag-push-only; initial cutover and recovery remain separate administration. [DEV and Production acceptance](../clc-deployment.md#planned-dev-and-production-tag-acceptance) remain open; synthetic tests do not establish real-IIS acceptance.
+- [Configuration provisioning](#external-configuration-provisioning), [settings](#configuration-reference), [Entra setup](#multi-tenant-entra-onboarding-and-global-catalog-policy) and [persistent keys](#persistent-data-protection-keys).
+- [Logging](troubleshooting.md#persistent-file-logging), [optional SQL catalog monitor](catalog-monitor.md) and [subscriptions](subscriptions.md).
+- [Enrollment inputs](#enrollment-approval-inputs), [baseline approval inputs](#baseline-approval-inputs), [release contracts/checks](#deployment-contracts-and-verification) and [live application gates](#live-gate-checklist).
 
 ## Host setup
 
-Provision the external key directory and deployment configuration before deploying a Release identity. Keep keys, configuration and logs outside application content. Every configuration edit needs a new opaque revision. Local readiness does not establish live Entra/SSRS acceptance.
+Use Windows Server 2022 x64, IIS and the .NET 10 Hosting Bundle/ANCM 20. Repair the bundle if IIS was installed afterward. [Microsoft's IIS hosting guide](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0) covers component installation. Keep the generated release `web.config`; disable detailed errors, routine stdout logging and request/body tracing.
 
-1. **IIS:** Install IIS and the current .NET 10 Hosting Bundle. Repair the bundle if IIS was installed afterward. Use a dedicated 64-bit pool, No Managed Code, integrated pipeline and one worker. Publish the generated `web.config` with the application. Keep ASP.NET detailed errors, stdout logging and HTTP body tracing off in normal production. See Microsoft's [IIS hosting guide](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0).
-2. **Worker identity:** Use the application's regular AD service account as the pool's custom identity; a gMSA is not required. An AD/IIS administrator manages its password through the protected account/deployment process. Never put it in source or SQL connection strings. Grant only required worker logon rights and application read/execute. Keep writable, log and key locations separate. Do not grant local Administrators membership. The CLC deployment identity is separate, is a local administrator only on managed IIS servers, and runs with an enabled elevated token for application-content writes and pool control. It does not need the worker's external key or logging permissions.
-3. **Service access:** Allow outbound TLS to the configured SSRS origin and HTTPS to Entra discovery/token endpoints. Allow the configured SQL endpoint when monitoring is enabled. SOAP uses process credentials through `UseDefaultCredentials`; SQL uses `Integrated Security=true`. Redirects stay disabled and certificate validation stays enabled. Enable IIS Anonymous authentication so ASP.NET Core handles OIDC. Give the AD account minimum SSRS read-properties/execute/view access to roots, ancestors, reports and required linked targets, data sources and subreports. The portal does not inspect definitions/sources to approve reports. Monitoring only detects changes; it never modifies SSRS databases.
-4. **Entra:** Configure the single organizational multi-tenant confidential app and exact `ReportViewer` role [below](#multi-tenant-entra-onboarding-and-global-catalog-policy). Supply one client ID, explicit tenant GUIDs and shared catalog settings. Store and rotate the server-side client secret in the restricted external `application.json`. Keep secrets out of source, command lines, dumps and browser settings.
-5. **HTTPS and proxies:** Bind the approved hostname/certificate and set `AllowedHosts`. Production enables HSTS and HTTPS redirection. In-process IIS integration handles trusted server forwarding. Added forwarded-header middleware trusts the framework's loopback allowlists for one hop. Never clear those allowlists or accept arbitrary `X-Forwarded-*` headers. Review explicit trust settings for any additional proxy. Test redirects and OIDC callbacks under the final topology.
-6. **Persistent keys:** Provision `DataProtection.KeyRingPath` and `ssrs-web-dpapi-user-v1` per the [deployment runbook](../clc-deployment.md). Grant the runtime account key-directory read/write. Enable Load User Profile and setProfileEnvironment for user-scope DPAPI; see [IIS Data Protection guidance](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0#data-protection). The stable application discriminator and retained ring preserve cookies across upgrades. The startup smoke must pass under the actual worker identity. Unmarked legacy rings need separately approved migration without overwriting keys. Infrastructure owns key/profile backup and recovery. Never commit keys or credentials. Recycling still clears report executions.
-7. **Logs:** Clc.Logging supplies NLog infrastructure; the application-owned SafeLogLayout sanitizes persistent ProgramData [Logs](troubleshooting.md#persistent-file-logging) and native stderr fallback. Bootstrap is stderr-only; configured file readiness is required before serving requests unless explicitly disabled. Logs can contain report parameters, SQL diagnostics and SSRS faults; restrict them to authorized administrators/developers. Disable query/body logging, content-bearing failed-request traces and HTTP client body tracing. Omit IIS `cs-uri-query` and protect queries at upstream proxies too. Microsoft categories default to Warning; authentication protocol internals must remain at least Warning. Use browser Reference IDs for support.
-8. **Limits:** Request deadlines cover metadata cascades and downloads. Set SSRS execution/data-source timeouts separately. Portal cancellation stops local requests and deletes local state, not SSRS server jobs. Tune limits after synthetic load and approved live performance tests. Measure process/parser overhead and IIS limits before raising size or capacity bounds. Rejected requests return safe errors.
+The dedicated pool requires x64, Integrated pipeline, No Managed Code, one worker, `recycling.disallowOverlappingRotation=true`, AutoStart=true and profile loading. The dedicated site must be Started with ServerAutoStart=true, one root application/virtual directory at the canonical Application root, and the approved HTTPS hostname/binding/certificate. Inspect existing values in IIS Manager before deciding whether reuse is compatible. Neither another pool's physical-root overlap nor a shared pool is supported.
 
-Use one worker and [non-overlapping recycling](troubleshooting.md#persistent-file-logging). Subscriptions have additional [IIS hosting and shutdown requirements](subscriptions.md#production-provisioning-and-deployment).
+Use a conventional AD application account outside local Administrators, including indirect membership. Infrastructure configures its password/logon rights; runtime needs application read/execute and [external directory access](#initial-ntfs-provisioning). The separate deployment account needs its admitted SID and an enabled elevated local Administrators token for content/pool control. Never store passwords in source, commands or SQL connection strings. Protected infrastructure uses SYSTEM/Administrators ownership/writers, without direct protected-resource write ACEs for individual deployment SIDs; elevated access is inherited through Administrators. Independent approval remains procedural against that privileged account.
 
-The trusted toolkit's `Get-ClcHostEnrollment` and `Initialize-ClcHostEnrollment -Operation Plan` report generic enrollment state only. Before using the consumer deployment workflow, complete the [application-specific DEV preflight](../clc-deployment.md#ssrs-specific-dev-preflight); its live host checks remain **NOT RUN** until actual evidence is recorded.
+Enable IIS Anonymous authentication so ASP.NET Core handles Entra OIDC. Allow outbound HTTPS to SSRS and Entra discovery/token endpoints. SOAP uses process credentials (`UseDefaultCredentials`), without redirects or TLS bypass. Grant the AD account minimum read-properties/view/execute access to roots, ancestors, reports and required linked targets, data sources and subreports. SSRS controls definitions/credentials; Entra identity is never delegated to SSRS. SQL connectivity is conditional on enabled monitoring/subscriptions; delivery also needs Postmark access.
+
+Use the approved portal hostname/certificate and `AllowedHosts`. Production enables HSTS/HTTPS redirection. In-process IIS handles trusted server forwarding; added forwarding trusts framework loopback allowlists for one hop. Review explicit trust for any additional proxy without clearing allowlists. Test final-topology redirects/callbacks. Omit IIS `cs-uri-query` and protect proxy queries too; logs/traces must not capture callbacks, bodies or report links.
+
+Infrastructure must set a site-specific parent policy in protected `applicationHost.config`, outside replaceable content. Substitute the **actual selected site**, retaining the exact value and attribute lock:
+
+```xml
+<location path="REPLACE_WITH_ACTUAL_SITE" overrideMode="Allow">
+  <system.webServer>
+    <aspNetCore shutdownTimeLimit="60" lockAttributes="shutdownTimeLimit" />
+  </system.webServer>
+</location>
+```
+
+A child `shutdownTimeLimit` is invalid even if its value matches. Before binding a legacy cutover inventory, stop/fence the pool and independently remove the old child attribute while retaining the original separately. The workflow does not edit it. Shared-configuration redirection is refused unless enabled is absent or exactly false (case-insensitive); `configSource` and unsupported layouts are refused. Confirm effective inheritance before deployment. Enabled [subscriptions](subscriptions.md#production-provisioning-and-deployment) additionally require Application Initialization, preload, AlwaysRunning, idle timeout zero and at least 90 seconds of pool shutdown grace. The budgets remain ANCM60/Host45/Hangfire30.
+
+Tune portal/SSRS deadlines and capacity only after synthetic load and approved live performance tests. Portal cancellation stops local requests/state, not remote SSRS server jobs. Pool recycling clears report executions. Local readiness does not establish remote service or live application acceptance.
 
 ## Report link hosting
 
@@ -48,16 +52,28 @@ Complete [workspace live acceptance](../behavior/report-workspace.md#workspace-l
 
 ## External configuration provisioning
 
-Released DEV builds use `CommonApplicationData\clc-ssrs-web-dev\Config\application.json`; stable Production builds use `CommonApplicationData\clc-ssrs-web-production\Config\application.json`. These names come from validated tag/target metadata compiled into the release, independently checked during publication and deployment. `--environment` cannot change the target. Beta/RC artifacts have no runtime namespace and refuse discovery/startup/validation. Local Synthetic development retains `clc-ssrs-web`. Config, fixed `Keys`, `Logs`, `Application`, `Inbox` and infrastructure-owned `Deployment` are separate siblings. DEV/Production have independent installed toolkit pins and approvals. Do not automatically move configuration, keys, logs or old enrollment evidence; cutover/re-enrollment requires separate infrastructure authority. Data Protection application name `clc-ssrs-web` and compatibility ID `ssrs-web-dpapi-user-v1` remain unchanged. `Clc.Configuration` owns its shared startup snapshot, path convention and first-run example copy. On Windows, startup also checks that the package's CommonApplicationData path matches the existing native ProgramData known-folder and system-drive validation; a mismatch fails closed rather than redirecting the external files. No ConfigFile/bootstrap variable or normal path argument exists. Appsettings, user secrets and ordinary environment/command-line settings do not supply operational values. Hosting controls such as environment selection and `--urls` remain supported.
+Released DEV builds use native `CommonApplicationData\clc-ssrs-web-dev\Config\application.json`; stable Production uses `clc-ssrs-web-production`. Compiled tag/target metadata fixes this choice; `--environment` cannot change it. Beta/RC artifacts have no runnable namespace. Local Synthetic development retains `clc-ssrs-web`. Native Windows known-folder/system-drive checks reject redirected locations. The target's Config, Keys, Logs, Application, Inbox and protected Deployment are disjoint siblings; do not automatically move old configuration, keys or enrollment evidence during cutover.
+
+`Clc.Configuration` owns path discovery, the shared startup snapshot and first-run example copy. There is no ConfigFile/bootstrap variable or normal operational path argument. Appsettings, user secrets and ordinary environment/command-line settings do not supply operational values. Hosting controls such as environment selection and `--urls` remain supported.
 
 A published build supports hostless path discovery with `dotnet <published SsrsPortal.dll> --clc-appdata-directory` before configuration is provisioned. It prints only the absolute application data root. It does not create directories, load `application.json`, initialize logging or start the host. It does not establish file access, IIS enrollment or deployment readiness; continue through the separate configuration, ACL, enrollment and readiness checks below.
 
 `SsrsPortal:TestConfigurationFile` exists only for isolated Synthetic Development fixtures. Released DLLs reject Development before configuration, logging or key setup. Production and Staging reject it before reading a file. Never configure it in IIS.
 
+The setup administrator may copy the reviewed `application.Example.json` to the provisioned `Config\application.json` before validation. Preserve an existing file; use create-new semantics:
+
+```powershell
+# $publishedDirectory is the independently trusted published application directory.
+$appDataDirectory = & dotnet (Join-Path $publishedDirectory 'SsrsPortal.dll') --clc-appdata-directory
+if ($LASTEXITCODE -ne 0) { throw 'Compiled target discovery failed.' }
+$configFile = Join-Path $appDataDirectory 'Config\application.json'
+[IO.File]::Copy((Join-Path $publishedDirectory 'application.Example.json'), $configFile, $false)
+```
+
 The sanitized example is included in the published application. On a missing file, one normal startup under an appropriately permitted setup identity creates the application data and `Config` directories, copies the example byte-for-byte, then stops with an instruction to edit and restart. Run this on the target host from a trusted published build:
 
 ```powershell
-$applicationDll = 'C:\Apps\SsrsPortal\SsrsPortal.dll'
+$applicationDll = Read-Host 'Absolute path to the trusted published SsrsPortal.dll'
 $appDataDirectory = & dotnet $applicationDll --clc-appdata-directory
 if ($LASTEXITCODE -ne 0) { throw 'Application data path discovery failed.' }
 $configFile = Join-Path $appDataDirectory 'Config\application.json'
@@ -71,14 +87,62 @@ if (!(Test-Path -LiteralPath $configFile)) {
 
 Replace every literal `REPLACE_ME` in the created file with approved portal hostnames, the real HTTPS SSRS `/ReportServer` URL, roots/exclusions, Entra ID/secret and approved tenants, revision and key path. Review and restrict its NTFS ACL before starting the runtime identity; normal runtime needs read access, not write access to `Config`. Enable the optional SQL monitor only after live acceptance. The [example](../../src/SsrsPortal/application.Example.json) is a template, not an operational file. Existing `application.json` is never overwritten or merged; startup rejects remaining placeholders and retains the SSRS-specific validation. `Portal`, `Entra` and `AllowedHosts` are required. Deployment validation and `--clc-appdata-directory` remain read-only; if validation must run before normal startup, the setup administrator must provision the file from the published example separately.
 
+### Initial NTFS provisioning
+
+Run this reviewed initial setup example in elevated PowerShell on Windows Server 2022. Supply the actual dedicated regular AD service account; runtime needs no local administrator membership. For existing directories, inspect effective permissions and preserve approved administrative entries instead of blindly replacing ACLs. Provision the infrastructure-owned target parent with safe traversal/replacement protection first. Run before copying configuration/bootstrap startup and fence other writers. The example refuses existing Config/Keys/Logs directories before changes; it does not authorize repair of enrolled resources.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+# $applicationDll is the absolute trusted published DLL path from provisioning above.
+$applicationRoot = (& dotnet $applicationDll --clc-appdata-directory).Trim()
+if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($applicationRoot)) { throw 'Compiled target discovery failed.' }
+$serviceAccount = Read-Host 'Dedicated IIS application pool identity (DOMAIN\account)'
+$serviceSid = ([Security.Principal.NTAccount]::new($serviceAccount)).Translate([Security.Principal.SecurityIdentifier])
+$administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+$system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$entries = @(@{ Name = 'Config'; Rights = 'ReadAndExecute' }, @{ Name = 'Logs'; Rights = 'Modify' }, @{ Name = 'Keys'; Rights = 'Modify' })
+foreach ($entry in $entries) {
+    if (Test-Path -LiteralPath (Join-Path $applicationRoot $entry.Name)) {
+        throw 'Existing external directories need independent ACL inspection; no changes made.'
+    }
+}
+foreach ($entry in $entries) {
+    $directory = Join-Path $applicationRoot $entry.Name
+    New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner($administrators)
+    foreach ($administrator in @($administrators, $system)) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $administrator, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+    }
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        $serviceSid, $entry.Rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+    Set-Acl -LiteralPath $directory -AclObject $acl
+    Get-Acl -LiteralPath $directory | Format-List
+}
+```
+
+The service gets Config read/traverse and Keys/Logs Modify, including create/write/append and deletion for rollover/expired-file cleanup. Administrators/SYSTEM retain management access. Check parent traversal and existing child-file inheritance under the actual service identity. Do not grant broad Users/Everyone access or service write access across the application root. Administrators apply these grants; application startup never sets ACLs.
+
+### Persistent Data Protection keys
+
+Infrastructure provisions the target's canonical Keys directory outside Application. Set `DataProtection.KeyRingPath` to that absolute path and `KeyStoreCompatibilityId=ssrs-web-dpapi-user-v1`. The application name remains **clc-ssrs-web** across targets/upgrades. Only infrastructure and the actual AD worker identity may access keys as required; runtime needs read/write for generation/rotation, without owner/DACL control or replacement rights on protected ancestors. Use [initial NTFS provisioning](#initial-ntfs-provisioning) for fresh directories and inspect effective access as the worker.
+
+Enable IIS `LoadUserProfile=true` and `setProfileEnvironment=true`; retain the actual worker's Windows profile. The required `ssrs-user-dpapi` envelope uses **Windows user-scope DPAPI** and refuses plaintext, machine-scope and unmarked legacy rings. Do not overwrite an existing ring or copy it between identities/targets. Separately approve and qualify any legacy migration or identity/profile change. See [Microsoft's IIS profile guidance](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0#data-protection).
+
+Before readiness, actual worker startup must protect/unprotect a local smoke value using the persistent ring and decrypt every retained nonrevoked key. The deployer's read-only validator cannot prove user-profile decryption. Recycle and verify persistence under the actual identity. Retained ring/discriminator preserves cookies across upgrades; recycling still clears report executions. Infrastructure separately backs up and recovers keys and compatible DPAPI profile/account material; application-file backups do not restore them. Never commit key material.
+
 ### Configuration reference
 
-Required values have no operational default. Sizes below are bytes, with MiB equivalents. See [report link hosting](#report-link-hosting) for fixed request/link limits, the [deployment runbook](../clc-deployment.md) for `Deployment`/`DataProtection`, and [subscriptions](subscriptions.md#configuration-bounds-and-scheduling) for delivery settings.
+Required values have no operational default. Sizes below are bytes, with MiB equivalents. See [report link hosting](#report-link-hosting) for fixed request/link limits, [persistent keys](#persistent-data-protection-keys) for `DataProtection`, and [subscriptions](subscriptions.md#configuration-bounds-and-scheduling) for delivery settings.
 
 | JSON setting | Required value, default and supported bounds |
 | --- | --- |
 | Hosting environment (`ASPNETCORE_ENVIRONMENT` / `DOTNET_ENVIRONMENT`) | `Production` for deployment; hosting control, not an `application.json` value |
-| `AllowedHosts` | Required approved portal hostname(s); example is `localhost` |
+| `Deployment:ConfigurationRevision` | Required nonsecret safe code, maximum 64 characters; change on every edit/rotation; unchanged-revision byte drift is refused |
+| `DataProtection:KeyRingPath`, `DataProtection:KeyStoreCompatibilityId` | Required canonical target Keys directory and `ssrs-web-dpapi-user-v1`; see [persistent keys](#persistent-data-protection-keys) |
+| `AllowedHosts` | Required approved portal hostname(s); replace the example `REPLACE_ME` |
 | `Portal:UseMock`, `Portal:TestAuth` | Both `false`; synthetic SOAP/authentication are Development-only, and test authentication requires mock SOAP |
 | `Portal:Diagnostics:Enabled` | `false`; enables detailed server failure logging, which can include sensitive SSRS fault content |
 | `Portal:Diagnostics:DetailedFailuresAtDebug` | `true`; captures bounded server failure details at Debug, independent of browser details |
@@ -109,8 +173,7 @@ Required values have no operational default. Sizes below are bytes, with MiB equ
 | `CatalogMonitor:IntervalSeconds` | `30`; 5–3,600 seconds |
 | `CatalogMonitor:ConnectionString` | Required when enabled; SQL Server/database, Windows integrated authentication and validated TLS; see [SQL catalog monitor](catalog-monitor.md) |
 | `CatalogMonitor:CommandTimeoutSeconds` | `5`; 1–120 seconds |
-| `Logging:LogLevel:*` | `Information` default, `Debug` for `SsrsPortal`, `Warning` for `Microsoft`, `Microsoft.AspNetCore`, `Microsoft.AspNetCore.Authentication` and `System.Net.Http.HttpClient`; named levels `Trace` through `None` |
-| `Logging:File:*` | Enabled; automatic daily `ssrs-web-yyyy-MM-dd.log` filenames, 52,428,800-byte (50 MiB) size rollover, 30-day retention. Size 1,024–1,073,741,824 bytes; retention 1–3,650 days. Optional `MaxArchiveFiles` 1–10,000; omitted means historical unlimited count. No path override. Remove the old `Rotation` key before deployment. See [persistent file logging](troubleshooting.md#persistent-file-logging) |
+| `Logging:*` | Use the single [logging configuration reference](troubleshooting.md#persistent-file-logging), including levels, rotation, retention, bounds and removal of legacy `Rotation` |
 
 Byte budgets cover accounted session content and buffers, not the CLR working set. XML/HTML parsers and framework objects add overhead. Monitor memory and size for concurrency. Active session leases reserve SOAP/output scratch space. Multiple workers or a farm require a reviewed distributed-session design.
 
@@ -118,11 +181,11 @@ Byte budgets cover accounted session content and buffers, not the CLR working se
 
 - Administrators/SYSTEM control Config provisioning and credential rotation. The actual AD pool identity gets read/traverse only, with no file or directory writes.
 - A separately approved virtual-pool setup must grant its `IIS AppPool\<pool>` identity, not an interactive account.
-- Remove broad inherited Users/Authenticated Users/IIS_IUSRS access as appropriate. Inspect effective permissions and protect administrative backups equally. Check access as the worker, not just the operator. See [initial NTFS provisioning](troubleshooting.md#initial-ntfs-provisioning).
+- Remove broad inherited Users/Authenticated Users/IIS_IUSRS access as appropriate. Inspect effective permissions and protect administrative backups equally. Check access as the worker, not just the operator. See [initial NTFS provisioning](#initial-ntfs-provisioning).
 - Keep Config outside the web root, published app, release replacement tree and source checkout. Deployments must preserve it without packaging or overwriting credentials. Provisioning may need elevation; runtime must not need administrator membership.
 - Never use secret-bearing environment variables or command-line settings as a fallback. Remove obsolete `Portal:ApprovedReports`, `Entra:TenantId` and `Entra:GroupId` from every old provider. Even empty values cause startup errors.
 
-Configuration loads once with `reloadOnChange:false`. After an approved edit or rotation, restart the local process or recycle the dedicated pool. Coordinate with staff: recycling discards report sessions.
+Configuration loads once with `reloadOnChange:false`. Change `Deployment.ConfigurationRevision` on every edit or rotation. After approval, restart the local process or recycle the dedicated pool. Coordinate with staff: recycling discards report sessions.
 
 Missing, unreadable or invalid files stop Production startup before Entra/SSRS access. Diagnostics identify the file/section and remedy without exposing JSON values, credentials or parser/binder inner exceptions. Fix configuration and ACLs through [safe server diagnostics](troubleshooting.md#startup-troubleshooting-and-deployment). No appsettings or synthetic-authentication fallback is enabled.
 
@@ -162,11 +225,73 @@ Test real identities in two approved tenants, an unknown tenant with a role, an 
 
 Test tenant removal plus recycle. Test role deassignment after sign-out/new sign-in, and separately verify the existing-cookie lifetime. Complete the direct-policy and SSRS-delegation [gates below](#live-gate-checklist). Synthetic checks do not close them.
 
-## Deployment repository integration
+## Enrollment approval inputs
 
-Hosted release/build/archive jobs use [`deployment/toolkit.lock.json`](../../deployment/toolkit.lock.json) for packaging-toolkit source, version, distribution archive SHA-256, module inventory SHA-256 and asset URI. Published `Clc.Deployment` `0.1.0-beta.4` is independently pinned for format-3 build-time packaging; the ASP.NET Core companion remains beta.3. The upstream beta.4 Release reports `immutable=false`; exact archive and inventory pins authenticate the toolkit. The independently installed deployment-host runtime has separate protected pins and must contain the compatible automated standing-deployment API. DEV and Production may run different compatible versions under their respective protected `Deployment` directories. The build pin neither upgrades those runtimes nor grants host installation, activation or application deployment authority. Independently authorized target-local installation, enrollment, approved baseline, standing authorization and live acceptance remain required.
+Use the upstream [host-local configuration](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#host-local-deploymentjson) and [independent authorization procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#independent-initialization-authorization). This worksheet supplies SSRS values without replacing those contracts.
 
-Enable host standing authorization only after independent host setup/enrollment and a successful separately approved baseline. Repository tests do not verify GitHub settings, runner admission, protected host configuration, actual IIS state or DEV access. Follow the [deployment runbook](../clc-deployment.md) for release identity, validation, keys, deployment and recovery, and keep live DEV and Production qualification open until their evidence exists.
+| Source | SSRS-specific values / how to obtain them |
+| --- | --- |
+| Application constants | In [deployment.example.json](../../deployment/deployment.example.json), retain contract family/version/kind, `applicationId=ssrs-web`, `targetId=ssrs-web-dev`, `environmentName=DEV`, `runtimeEnvironment=Production`. Under native ProgramData\clc-ssrs-web-dev use Application, Config\application.json, Keys, Inbox and Deployment for the five path fields. deployment.json itself is Config\deployment.json |
+| devweb observations | Actual dedicated `siteName`, `applicationPoolName`, approved `runtimeAccountName`, resolved `runtimeIdentitySid`, final HTTPS DNS hostname/port for `readinessUri` ending `/health/ready`. Inspect IIS Manager's pool Advanced Settings / Identity and site Bindings; do not expose passwords. Resolve the approved account with `([Security.Principal.NTAccount]::new($runtimeAccountName)).Translate([Security.Principal.SecurityIdentifier]).Value` |
+| Authenticated toolkit | Published version/source/archive/module inventory pins; independently reviewed installed helper paths; bootstrap executable inventory (module **and** tools), not the module-only digest. Use the exact approved distribution/verifier from [installation](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#trust-before-first-import) |
+| Host-policy observations | devweb SMBIOS UUID (`Get-CimInstance Win32_ComputerSystemProduct` / UUID), actual installed x64 dotnet/appcmd paths, canonical target-local policy/catalog/control/lock/version paths; observe actual infrastructure/deployment SIDs under the approved identities |
+| Protected pre-state | Exact deployment.json byte SHA-256 after final editing; actual resource physical identities/ACL hashes, selected IIS pre-state snapshot hash, certificate thumbprint and binding address. Upstream names `Get-HResourceBinding`, `Get-HIisSnapshot`, `Get-HIisSnapshotHash` and `Get-HBootstrapInventory` as the trusted observation helpers. Null resource bindings mean genuinely absent paths only |
+| Independent infrastructure approval | Approval authority SID (separate from deployer), reference/window/enabled state, initial policy generation/active pin/allowlists, exact permitted install/enroll/IIS operations and binding. For a conventional preconfigured AD pool use ExistingOnly. Legacy cutover additionally needs full approved original inventory/root identity and canonical disjoint backup. Observations/digests do not grant approval |
+
+Provision the protected handoff at `Deployment\enrollment\authorizations\ssrs-web-dev.json`, its empty `enrollment.lock` and `evidence` directory, plus authenticated `Deployment\bootstrap` containing exactly `Clc.Deployment`, `tools`, `source.commit`, `distribution.zip`. `distribution.json` stays inside the archive. Retain old namespaces/evidence; no automatic migration or global policy fallback exists.
+
+**Upstream observation procedure gap (reviewed at master 557192e):** the authorization guide names observation helpers but does not give a complete preapproval collection invocation/session construction and disposal procedure. `Open-HSession` and Get/Plan already require the completed authorization, while `Get-HIisSnapshot` needs a session with prospective policy/helper context. Neither calling Get/Plan before the handoff nor copying synthetic qualification records solves this. Infrastructure must supply an independently reviewed read-only collection procedure for bootstrap inventory, IIS snapshot and resource bindings before signing the exact handoff. No competing SSRS enrollment tool or fabricated approval is provided here.
+
+## Baseline approval inputs
+
+Use the installed toolkit's [schema-1 release approval contract](https://github.com/clcdpc/clc-deployment/blob/master/schemas/release-approval.schema.json) and [deployment procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#prerequisites-and-commands). An independent administrator writes the protected approval; there is no production approval-writing command. Qualification scripts are not operational approval generators.
+
+| Input | Authoritative SSRS evidence |
+| --- | --- |
+| Application/target/repository | `ssrs-web`, `ssrs-web-dev`, `clcdpc/ssrs-web`; compare package and enrolled target |
+| `releaseId`, full `sourceCommit`, ZIP/manifest hashes | Independently authenticated producer's [provenance record](../../scripts/release/Write-ReleaseProvenance.ps1), exact ZIP/manifest and compiled SsrsPortal.dll metadata; inspect with installed `Test-ClcRelease -ArchivePath` and reconcile every identity |
+| `provenance` | `.github/workflows/release.yml`, `buildJob=release`, exact runId/runAttempt, release artifactId and service transport SHA-256. Verify through authenticated GitHub run-attempt/jobs/artifacts APIs and downloaded transport; do not hash the inner ZIP as the transport |
+| `releaseSequence` | Installed `Test-ClcRelease -ReleaseTag $tag` result; require DEV. Its tag-derived releaseId is a classification ID, **not** the attempt-specific package releaseId |
+| `approvalId`, enabled/authorization | Independently chosen safe ID, enable decision, infrastructure authority SID/nonsecret change reference/approved UTC; bind the exact reviewed source/package, never sample GUIDs/hashes |
+| `lineageId` | Independently selected DEV lineage for the baseline, retained by subsequent standing policy; do not infer it from a filename or create a new lineage for each release |
+
+Authenticate the tag object and peeled commit, platform workflow revision, successful hosted producer/archive jobs and attempt-specific artifacts before approval. The canonical GitHub Release carries release.zip, release-provenance.json, release-metadata.json, SHA256SUMS, LICENSE and THIRD-PARTY-NOTICES.md; later same-tag builds preserve those canonical assets while producing distinct Actions packages. Select one exact producer attempt rather than mixing canonical and rebuilt identities. The independent approval authenticates the expected hashes; nearby JSON alone does not.
+
+## Release and toolkit reference
+
+[release.yml](../../.github/workflows/release.yml) owns one tag-push chain `release → archive → deploy`. DEV allows unmerged tagged code/workflow/scripts/application configuration without PR admission; stable source must be contained in protected master history, including older ancestors. Beta/RC publish artifacts without host admission. Major/minor/patch are 0–9999, DEV/beta/RC N is 1–9998, without leading zeroes; other suffixes/case/build metadata are rejected. Compiled Release identity binds exact tag/target/source/attempt-specific releaseId. Local Synthetic builds cannot deploy.
+
+Only hosted archive has contents-write permission. Publication verifies exact source/producer/compiled/package/builder identities, creates/verifies a draft, publishes and requires Boolean immutable=true on the final canonical application Release. It never repairs conflicting/mutable published assets. The build-time [toolkit lock](../../deployment/toolkit.lock.json) pins published PowerShell beta.4 format 3. Upstream beta.4 is mutable; its authenticated archive digest remains essential. The ASP.NET Core companion stays beta.3. The host's independently protected active pin may differ; building grants no installation, activation or deployment authority. Toolkit/application license and binary obligations remain in [licensing guidance](../licensing-and-distribution.md).
+
+For a fresh same-tag build, rerun **all jobs of the original push run** with `gh run rerun <run-id> --repo clcdpc/ssrs-web`. The attempt/package identity changes; canonical assets remain unchanged. Rerunning only archive/deploy cannot qualify another attempt's producer. Actions retention is 30 days; when unavailable, select a new deliberate unused version tag. GitHub is not FIFO: newer eligible tags supersede older ones even if their builds failed/pended. Current exact identity still needs fresh readiness for NoOp. Target concurrency groups do not cancel in-progress work.
+
+The current SSRS [adapter](../../scripts/release/AutomaticDeployment.Adapter.ps1) emits verified-release schema 1 and needs standing-authorization schema 1. Its source eligibility lives in the authenticated [SSRS tag verifier](../../scripts/release/TagRelease.Common.ps1), which accepts unmerged DEV and emits no snapshots. The upstream shared consumer's schema-2 policy/evidence pair is a different supported integration; copying only its sourcePolicy object would fail SSRS admission. Bind standing ID ssrs-web-dev to application/target/repository/DEV, producer release.yml/release and baseline lineage after successful enrollment/baseline. Deployment job is `deploy`; the policy's buildJob is `release`.
+
+## Deployment contracts and verification
+
+[Application validation](../../src/SsrsPortal/Configuration/DeploymentContract.cs) uses the normal bounded configuration reader without starting logging, host/listeners, remote clients, Hangfire or key generation. The fixed invocation is:
+
+```powershell
+dotnet SsrsPortal.dll --validate-deployment --configuration-path 'C:\ProgramData\clc-ssrs-web-dev\Config\application.json' --data-protection-root 'C:\ProgramData\clc-ssrs-web-dev\Keys' --environment Production
+```
+
+Use the actual native ProgramData path if different. Production/Staging only; success is exit 0 and one version-1 JSON object under 8 KiB. It runs as deployer; worker startup must separately prove user-DPAPI/profile access. Configuration revision changes require a restart even with identical release bytes; unchanged-revision drift is refused.
+
+Anonymous HTTPS GET `/health/ready` returns no-store JSON with exactly readinessContractVersion=1, status=ready, applicationId, releaseId, sourceCommit, runtimeEnvironment and configurationRevision. Match every field to the approved release/configuration; generic 200, redirects/authentication, wrong/stale identity or TLS bypass do not qualify. Unavailable/stopping/synthetic Development returns 503. Readiness proves local startup, persistent-key smoke and ApplicationStarted, not remote Entra/SSRS/SQL behavior.
+
+Verify installed Application bytes against the exact retained manifest inventory. Protected state is `Deployment/control/<targetKey>/current.json`, `journal.json`, `attempts/<attemptId>/deployment.json`, `releases/<approvalId>.json`, `backups/<attemptId>/index.json` plus application bytes, and staging. Obtain targetKey from the actual machine UUID/pool using the upstream [canonical state contract](https://github.com/clcdpc/clc-deployment/blob/master/docs/contracts.md#canonical-lock-and-phase-state); never guess it. Successful readiness/final inventory precedes current generation and matching Completed journal/terminal attempt. A fresh target's baseline has generation 1 and a verified empty backup. NoOp preserves current/application bytes/generation but records a new Completed attempt. Check pool Started/exactly one worker in actual IIS, not just historical state. Retain evidence independently of temporary Actions storage.
+
+### Repeatable local checks
+
+Use [README verification](../../README.md#verification), particularly `Test-DevDeployment.ps1`, `Test-TagDeployment.ps1`, `Test-ReleaseArchive.ps1`, `Test-ReleasePackaging.ps1`, and `Test-DeploymentReadiness.ps1 -ActionlintPath <approved-actionlint-1.7.12-executable>`. [Windows CI](../../.github/workflows/verify.yml) provides exact actual Release/ordinary publish arguments. Packaging can additionally use `-PublishDirectory <actual-CLC-publish> -OrdinaryPublishDirectory <ordinary-publish> -PublishedToolkit`: independently authenticate downloaded beta.4 archive before evaluating its verifier, then check format-3/inventory/import/compiled/producer bindings. Historical beta.3 archive rejection uses its historical lock. Ordinary tests stay offline without PublishedToolkit.
+
+The independently pinned Windows integration fixture remains reproducible from clean raw-byte toolkit source:
+
+```powershell
+pwsh -NoProfile -File ./scripts/release/Test-DeploymentIntegration.ps1 -ToolkitSourceRoot '<clean-exact-toolkit-checkout>' -ToolkitSourceCommit 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d -BuildInputs
+```
+
+It builds unpublished format-3 builder dev.2/runtime dev.1 candidates, compiles distinct DEV/Production identities, and exercises the real engine/application with synthetic IIS/platform/access/runtime-identity observations. Its create-new marker-owned ProgramData fixture refuses an existing namespace. NTFS/state/backup effects, helpers, DPAPI and loopback readiness are real; IIS/TLS/identity/remote-service acceptance is not. It covers upgrade/NoOp/revision restart/readiness failure/retry refusal/AcceptCandidate, config/key/backup preservation and standing/rebuild/revocation/order checks. Without BuildInputs, supply ReleaseArchivePath/UpgradeReleaseArchivePath and optionally StandingReleaseArchivePath/RebuildReleaseArchivePath from distinct compiled synthetic packages. The optional pair shares source and has distinct run/release identities. Never copy synthetic pins/approvals into operational configuration. Missing Windows/local-SQL prerequisites are skipped or inconclusive, not passes. Generated evidence stays ignored under artifacts/.
 
 ## Catalog cache operations
 
