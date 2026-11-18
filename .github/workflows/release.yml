@@ -54,11 +54,15 @@ jobs:
           $api = { param($method, $path, $body) Invoke-ClcReleaseApi -Repository $config.repository -Method $method -Path $path -Body $body }
           $null = Get-ClcVerifiedSource $config $env:GITHUB_REF_NAME $env:GITHUB_SHA ([long]$env:GITHUB_RUN_ID) $api
           "attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
-      - name: Use a fresh SDK installation directory
-        run: '"DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV'
+      - name: Read the exact SDK version and isolate its installation
+        id: sdk
+        run: |
+          "DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV
+          $version = (Get-Content -LiteralPath global.json -Raw | ConvertFrom-Json).sdk.version
+          "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ steps.sdk.outputs.version }}
       - name: Select the pinned packaging PowerShell
         run: |
           $tools = Join-Path $env:RUNNER_TEMP 'ssrs-build-tools'

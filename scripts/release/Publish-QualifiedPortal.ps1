@@ -23,7 +23,8 @@ $project = Join-Path $repository 'src/SsrsPortal/SsrsPortal.csproj'
 Push-Location $repository
 try {
     $sdk = (Get-Content -LiteralPath global.json -Raw | ConvertFrom-Json).sdk.version
-    if ((dotnet --version).Trim() -cne $sdk) { throw 'Use the SDK version selected in global.json.' }
+    $observedSdk = (dotnet --version).Trim()
+    if ($observedSdk -cne $sdk) { throw "The selected SDK $observedSdk differs from the exact version $sdk in global.json." }
     $properties = @(
         '-p:ClcIdentityKind=Release'
         "-p:ClcReleaseId=$($identity.releaseId)"

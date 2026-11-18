@@ -33,12 +33,16 @@ jobs:
           ref: 7fcfd03da044655b57fe47d55e234571bef035bd
           path: artifacts/clc-deployment
           persist-credentials: false
-      - name: Use a fresh SDK installation directory
+      - name: Read the exact SDK version and isolate its installation
+        id: sdk
         shell: pwsh
-        run: '"DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV'
+        run: |
+          "DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV
+          $version = (Get-Content -LiteralPath global.json -Raw | ConvertFrom-Json).sdk.version
+          "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@v5
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ steps.sdk.outputs.version }}
       - name: Provision the verified test tools
         shell: pwsh
         run: ./scripts/release/Initialize-ToolkitTestTools.ps1 -ToolkitRoot artifacts/clc-deployment -Destination "$env:RUNNER_TEMP/ssrs-test-tools"
