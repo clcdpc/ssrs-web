@@ -6,7 +6,7 @@ Staff in approved Microsoft Entra tenants need the `ReportViewer` role. Everyone
 
 Optional [subscriptions](docs/operations/subscriptions.md) use SQL Server, Hangfire, and Postmark without archiving output. The optional read-only [SQL monitor](docs/operations/catalog-monitor.md) refreshes catalog metadata; it never grants access.
 
-For DEV host commissioning, start with [the six-phase devweb procedure](docs/clc-deployment.md). Use [operations](docs/operations/README.md) for application configuration/Entra/keys and [troubleshooting](docs/operations/troubleshooting.md) for logging and recovery.
+For DEV host commissioning, start with [the DEVWEB commissioning guide](docs/clc-deployment.md). Use [operations](docs/operations/README.md) for application configuration/Entra/keys and [troubleshooting](docs/operations/troubleshooting.md) for logging and recovery.
 
 ## Verification
 
@@ -33,10 +33,6 @@ dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --no-build --no-resto
 pwsh -NoProfile -File ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/publish
 pwsh -NoProfile -File ./scripts/release/New-SubscriptionSetupArtifact.ps1 -OutputPath "$PWD/artifacts/administrative-setup.zip" -SourceCommit (git rev-parse HEAD)
 pwsh -NoProfile -File ./scripts/release/Test-SubscriptionPublish.ps1 -PublishDirectory artifacts/publish -AdministrationArchive artifacts/administrative-setup.zip
-pwsh -NoProfile -File ./scripts/release/Test-ReleasePackaging.ps1
-pwsh -NoProfile -File ./scripts/release/Test-TagDeployment.ps1
-pwsh -NoProfile -File ./scripts/release/Test-ReleaseArchive.ps1
-pwsh -NoProfile -File ./scripts/release/Test-DevDeployment.ps1
 dotnet list SsrsPortal.slnx package --vulnerable --include-transitive
 npm audit --audit-level=low
 node --test scripts/check-generated-artifacts.test.cjs
@@ -44,13 +40,20 @@ node scripts/check-generated-artifacts.cjs
 git diff --check
 ```
 
-Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The Windows packaging check uses the [build-time toolkit lock](deployment/toolkit.lock.json) with actual CLC Release publish output and verifies rejection of the historical beta.3 PowerShell archive. Offline packaging and separately pinned synthetic runtime tests remain independent.
+Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The hosted Windows job checks the consumer contract, release packaging, deployment compatibility and workflow syntax against the pinned toolkit. It uses synthetic fixtures. Run `actionlint` from the repository root to check GitHub Actions syntax locally.
+
+To reproduce the Windows contract checks, check out the exact revision in [the consumer configuration](.clc/release.json) and set `$toolkit` to that checkout. Use stable PowerShell 7.6.6 or later within 7.x and choose a new output directory on NTFS.
+
+```powershell
+./scripts/release/Test-ConsumerDeployment.ps1 -ToolkitRoot $toolkit
+./scripts/release/Test-QualifiedPackage.ps1 -ToolkitRoot $toolkit -OutputDirectory artifacts/qualified-package
+```
 
 ## Tagged releases
 
-The [tag workflow](.github/workflows/release.yml) builds and tests on hosted runners, publishes an immutable canonical GitHub Release, then deploys on the dedicated target runner under independently provisioned host standing authorization. DEV tags may select unmerged workflow, script and application changes without PR admission. Stable tags require protected `master` ancestry and select the separately commissioned Production target. Beta/RC publish artifacts only.
+The [tag workflow](.github/workflows/release.yml) qualifies and publishes an immutable GitHub Release on hosted runners. The shared deploy workflow verifies the artifact and deploys to the dedicated Windows target. Authorized DEV tags may select unmerged source. Stable tags require protected `master` ancestry. Beta and RC publish artifacts only.
 
-Authorized enrollment Apply installs and activates the initial host toolkit. Verify it and complete the separately approved baseline **before** enabling standing authorization. Routine releases then need only a permitted tag push. See [DEV commissioning](docs/clc-deployment.md), the [release reference](docs/operations/README.md#release-and-toolkit-reference) and [live acceptance](docs/clc-deployment.md#separate-dev-acceptance).
+Commission each server with [Initialize Deployment Host](docs/clc-deployment.md), then configure IIS and the external application settings and run read-only validation. Routine releases require an authorized tag push. See the [release reference](docs/operations/README.md#release-and-toolkit-reference) for package and recovery behavior.
 
 ## Run against DEV SSRS
 
@@ -72,7 +75,7 @@ Subscriptions are disabled by default. Follow [local subscription setup](docs/op
 
 - [Operations](docs/operations/README.md) and [troubleshooting](docs/operations/troubleshooting.md): configuration, IIS, Entra, logs, and diagnostics.
 - [Report workspace](docs/behavior/report-workspace.md), [expand/collapse](docs/behavior/report-expand-collapse.md), and [branding](docs/behavior/ssrs-branding.md): current behavior and limits.
-- [DEV commissioning](docs/clc-deployment.md): GitHub, devweb, configuration, enrollment, baseline and unattended tags; [optional diagnostic](.github/workflows/diagnose-deployment.yml).
+- [DEV commissioning](docs/clc-deployment.md): GitHub, DEVWEB, initialization, configuration, unattended tags and live acceptance.
 - [SOAP and renderer fixtures](tests/SsrsPortal.Tests/Fixtures/README.md): protocol expectations and synthetic coverage.
 
 ## Live acceptance

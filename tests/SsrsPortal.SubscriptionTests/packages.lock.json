@@ -51,8 +51,8 @@
       },
       "Clc.Deployment.AspNetCore": {
         "type": "Transitive",
-        "resolved": "0.1.0-beta.3",
-        "contentHash": "paYYEdeSapvFGBlSMibk+7DhnIUvY1/bIlXREdOVhNhwZ0bbQZOC2d2plwYWKed9zgB3/0OfQo3CERNK8xEFJA=="
+        "resolved": "0.1.0-beta.6",
+        "contentHash": "KCC8EZgXTxXSuBwWs+W+R61AZGW/CzF7siCb779GAHZuzP/FT3mIbFSIljip2AjrSXt1/Bi+bjsRzHfBC1sbCg=="
       },
       "Clc.Logging": {
         "type": "Transitive",
@@ -725,7 +725,7 @@
         "dependencies": {
           "AngleSharp": "[1.8.4, )",
           "Clc.Configuration": "[0.1.0-beta.5, 0.1.0-beta.5]",
-          "Clc.Deployment.AspNetCore": "[0.1.0-beta.3, 0.1.0-beta.3]",
+          "Clc.Deployment.AspNetCore": "[0.1.0-beta.6, 0.1.0-beta.6]",
           "Clc.Logging": "[0.1.0-beta.2, 0.1.0-beta.2]",
           "Cronos": "[0.13.0, )",
           "Dapper": "[2.1.89, )",

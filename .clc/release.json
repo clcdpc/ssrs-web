@@ -1,0 +1,15 @@
+{
+  "contractVersion": 3,
+  "applicationId": "ssrs-web",
+  "repository": "clcdpc/ssrs-web",
+  "integrationBranch": "master",
+  "devRuntimeEnvironment": "Production",
+  "producer": {
+    "workflowPath": ".github/workflows/release.yml",
+    "job": "package"
+  },
+  "requiredToolkitContractVersion": 3,
+  "orchestration": {
+    "sharedRevision": "7fcfd03da044655b57fe47d55e234571bef035bd"
+  }
+}

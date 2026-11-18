@@ -7,7 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Clc.Configuration" Version="[0.1.0-beta.5]" />
     <PackageReference Include="Clc.Logging" Version="[0.1.0-beta.2]" />
-    <PackageReference Include="Clc.Deployment.AspNetCore" Version="[0.1.0-beta.3]" />
+    <PackageReference Include="Clc.Deployment.AspNetCore" Version="[0.1.0-beta.6]" />
     <PackageReference Include="AngleSharp" Version="1.8.4" />
     <PackageReference Include="Cronos" Version="0.13.0" />
     <PackageReference Include="Dapper" Version="2.1.89" />
