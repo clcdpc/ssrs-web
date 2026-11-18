@@ -27,7 +27,16 @@ The November 18, 2026 read-only check found separate active creation and update/
 
 ## Phase 2 — Prepare devweb
 
-Confirm Windows Server 2022 x64, IIS, .NET 10 Hosting Bundle/ANCM 20, trusted HTTPS certificate/binding/DNS and approved PowerShell **7.6.6** at `C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe`. Protect PowerShell, installed helpers and runner temporary-script locations. Use separate elevated deployment and nonadministrator AD application identities.
+Confirm Windows Server 2022 x64, IIS, .NET 10 Hosting Bundle/ANCM 20 and trusted HTTPS certificate/binding/DNS. Use separate elevated deployment and nonadministrator AD application identities.
+
+The runner service's PATH must resolve `pwsh` to the approved, globally installed PowerShell **7.6.6** executable. Protect the executable, its parent directories, installed helpers and runner temporary-script locations. Keep the elevated runner's PATH and executable search directories under infrastructure control, with absolute entries protected from changes by untrusted users or repository content. Deployment fails if `pwsh` cannot be resolved or its version differs from 7.6.6.
+
+Verify the resolved executable and exact version under the actual deployment identity with the runner service's effective PATH.
+
+```powershell
+Get-Command pwsh -CommandType Application -All | Select-Object -ExpandProperty Source
+pwsh -NoLogo -NoProfile -NonInteractive -Command '(Get-Process -Id $PID).Path; $PSVersionTable.PSVersion.ToString()'
+```
 
 Inspect actual IIS resources and certificate selectors in IIS Manager or with these read-only commands in **Windows PowerShell 5.1** (native WebAdministration/IIS provider). Use PowerShell 7.6.6 separately for toolkit commands. Retain observations in restricted infrastructure records:
 
@@ -47,7 +56,7 @@ Apply the [IIS settings and shutdown policy](operations/README.md#host-setup). C
 
 ## Phase 3 — Configure SSRS Web
 
-Application ID `ssrs-web` determines the **`C:\ProgramData\clc-ssrs-web`** directory on both separate servers. The native Windows known-folder API resolves the ProgramData parent. `ssrs-web-dev` remains the DEV deployment target, GitHub environment, runner label and enrollment/standing authorization ID. If a former target-derived directory exists, have infrastructure inspect it and obtain separate cutover authority before changing it. Preserve configuration, keys, logs and protected deployment evidence in place for review.
+Application ID `ssrs-web` determines the `clc-ssrs-web` directory under each server's native Windows ProgramData known folder. `C:\ProgramData\clc-ssrs-web` is the conventional example for a server with ProgramData on `C:`. `ssrs-web-dev` remains the DEV deployment target, GitHub environment, runner label and enrollment/standing authorization ID. If a former target-derived directory exists, have infrastructure inspect it and obtain separate cutover authority before changing it. Preserve configuration, keys, logs and protected deployment evidence in place for review.
 
 | Child | Purpose and runtime access |
 | --- | --- |
@@ -76,7 +85,7 @@ The upstream beta.5 Release reports `immutable=false`. Independently verify the 
 
 1. Follow [initial bootstrap provisioning](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#initial-bootstrap-provisioning). In the linked native layout example, set `$applicationId = 'ssrs-web'`, `$targetId = 'ssrs-web-dev'` and `$approvedVersion` to the independently approved version. Prepare the protected namespace and place the authenticated bootstrap under `Deployment\bootstrap`. On a fresh host leave `Deployment\toolkit`, `Deployment\control` and `Deployment\locks` absent for Apply.
 2. Prepare `Config\deployment.json` from the [SSRS enrollment worksheet](operations/README.md#enrollment-approval-inputs) using actual devweb values. Have the selected deployment account run the upstream [read-only observation and candidate procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#3-collect-observations-and-prepare-the-candidate). Infrastructure independently reviews the observations, exact config bytes and permitted operations, then [approves and installs the protected handoff](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#4-independently-approve-and-install-the-handoff).
-3. In a fresh elevated approved PowerShell process as the admitted deployment account, run [Inspect and Plan](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#5-inspect-plan-apply-and-verify) using that handoff. Use the native layout from the upstream [host preparation procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#1-inspect-and-prepare-the-host) to set `$bootstrapRoot` and `$hostDeploymentJson`.
+3. In a fresh elevated PowerShell 7.6.6 process from the executable verified in Phase 2, run [Inspect and Plan](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#5-inspect-plan-apply-and-verify) as the admitted deployment account using that handoff. Use the native layout from the upstream [host preparation procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#1-inspect-and-prepare-the-host) to set `$bootstrapRoot` and `$hostDeploymentJson`.
 
    ```powershell
    $enrollment = & "$bootstrapRoot\tools\host\Get-ClcHostEnrollment.ps1" `

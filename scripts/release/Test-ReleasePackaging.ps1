@@ -519,17 +519,20 @@ try {
             $null=Assert-PortalReleaseArchive $archive $releaseId $sourceCommit
             $zip=[IO.Compression.ZipFile]::OpenRead($archive)
             try {
-                if ($IsWindows) {
+                $programData=if ($IsWindows) {
                     . "$PSScriptRoot/Deployment.Common.ps1"
-                    Initialize-SsrsNative
-                    $nativeProgramData=[SsrsWorkflow.Native]::ProgramData()
-                    $applicationData=Join-Path $nativeProgramData 'clc-ssrs-web'
-                    $control=Join-Path $applicationData ('Deployment\control\'+('a'*64))
-                    foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/*') {
-                        $relative=$entry.FullName.Replace('/','\')
-                        foreach ($prefix in @($applicationData,(Join-Path $control ('staging\'+('a'*36))),(Join-Path $control ('backups\'+('a'*36))))) {
-                            Assert-True ((Join-Path $prefix $relative).Length -le 240)
-                        }
+                    Get-SsrsProgramData
+                } else {
+                    # Measure Windows package paths against a representative root.
+                    'D:\ProgramData'
+                }
+                $applicationData=$programData.TrimEnd('\')+'\clc-ssrs-web'
+                $control=$applicationData+'\Deployment\control\'+('a'*64)
+                $prefixes=@($applicationData,($control+'\staging\'+('a'*36)),($control+'\backups\'+('a'*36)))
+                foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/*') {
+                    $relative=$entry.FullName.Replace('/','\')
+                    foreach ($prefix in $prefixes) {
+                        Assert-True (($prefix+'\'+$relative).Length -le 240)
                     }
                 }
                 foreach ($name in @('application/LICENSE','application/COPYRIGHT.md','application/BINARY-DISTRIBUTION-NOTICE.md','application/THIRD-PARTY-NOTICES.md',
@@ -544,8 +547,6 @@ try {
                     (Get-ReleaseHash (Join-Path $packageCache 'microsoft.data.sqlclient.sni.runtime/7.1.0/LICENSE.txt')))
                 foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/THIRD-PARTY-LICENSES/*') {
                     Assert-True ([IO.Path]::GetFileName($entry.FullName).Length -le 39)
-                    $stagePath='C:\ProgramData\clc-ssrs-web\Deployment\control\'+('a'*64)+'\staging\'+('a'*36)+'\'+$entry.FullName.Replace('/','\')
-                    Assert-True ($stagePath.Length -le 240)
                 }
                 foreach ($row in $notice.Split([char]10) | Where-Object { $_.StartsWith('| [') }) {
                     $licenseName=[regex]::Match($row,'\]\(THIRD-PARTY-LICENSES/([A-Za-z0-9_.-]+)\)').Groups[1].Value

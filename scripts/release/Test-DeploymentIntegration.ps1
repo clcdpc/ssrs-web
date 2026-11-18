@@ -313,7 +313,7 @@ try {
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
     Set-Acl -LiteralPath $shortRoot -AclObject $acl
     # New-T2Fixture must start on the canonical target volume. Hosted Windows
-    # runners may place RUNNER_TEMP on D: while native ProgramData remains on C:.
+    # runners may place RUNNER_TEMP on a different volume from native ProgramData.
     # The conventional root above is exclusively create-new and marker-owned.
     # SSRS-BRIDGE-TEMP-BEGIN
     $env:TEMP=$conventionalRoot; $env:TMP=$conventionalRoot
