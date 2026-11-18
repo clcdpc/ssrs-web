@@ -27,14 +27,23 @@ public sealed class ProgramDeploymentIntegrationTests
     private const string SyntheticReleaseSourceCommit = "1111111111111111111111111111111111111111";
 
     [TestMethod]
-    [DataRow("v1.0.0-dev.1", "ssrs-web-dev", "clc-ssrs-web-dev")]
-    [DataRow("v1.0.0", "ssrs-web-production", "clc-ssrs-web-production")]
-    public void CompiledReleaseSelectsOnlyItsTagBoundDirectory(string tag, string target, string expected)
+    [DataRow("v1.0.0-dev.1", "ssrs-web-dev")]
+    [DataRow("v1.0.0", "ssrs-web-production")]
+    public void ValidCompiledTargetUsesTheApplicationDirectory(string tag, string target)
     {
-        Assert.AreEqual(expected, ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", "test-release", SyntheticReleaseSourceCommit, "Release", tag, target)));
+        Assert.AreEqual("clc-ssrs-web", ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", "test-release", SyntheticReleaseSourceCommit, "Release", tag, target)));
         Assert.AreEqual("clc-ssrs-web", Program.ApplicationDirectoryName);
         Assert.AreEqual("clc-ssrs-web", PersistentKeyOptions.ApplicationName);
         Assert.AreEqual("ssrs-web-dpapi-user-v1", PersistentKeyOptions.CompatibilityId);
+    }
+
+    [TestMethod]
+    [DataRow("another-app", "test-release", SyntheticReleaseSourceCommit)]
+    [DataRow("ssrs-web", "synthetic-local", SyntheticReleaseSourceCommit)]
+    [DataRow("ssrs-web", "test-release", "0000000000000000000000000000000000000000")]
+    public void InvalidCompiledIdentityCannotSelectTheApplicationDirectory(string applicationId, string releaseId, string sourceCommit)
+    {
+        Assert.ThrowsExactly<InvalidOperationException>(() => ReleaseTarget.DirectoryName(CreateIdentityAssembly(applicationId, releaseId, sourceCommit, "Release")));
     }
 
     [TestMethod]
@@ -97,7 +106,10 @@ public sealed class ProgramDeploymentIntegrationTests
     [DataRow("v1.0.0", "ssrs-web-production")]
     public async Task PublishedReleaseEntryPointValidatesAndServesAnonymousConventionalReadiness(string releaseTag, string targetId)
     {
-        if (!OperatingSystem.IsWindows()) { Assert.Inconclusive("The actual Program acceptance test requires Windows DPAPI and a Windows Kestrel host."); }
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") != "github-hosted")
+        {
+            Assert.Inconclusive("The native ProgramData and DPAPI fixture requires an isolated GitHub-hosted Windows runner.");
+        }
 
         var repository = RepositoryRoot();
         var artifacts = Path.Combine(repository, "artifacts", "program-release-acceptance-" + Guid.NewGuid().ToString("N"));
@@ -123,6 +135,8 @@ public sealed class ProgramDeploymentIntegrationTests
         Assert.AreEqual(syntheticIdentity.ReleaseId, publishedIdentity.ReleaseId);
         Assert.AreEqual(sourceCommit, publishedIdentity.SourceCommit);
         Assert.AreEqual("Release", publishedIdentity.Kind);
+        Assert.AreEqual(releaseTag, publishedIdentity.ReleaseTag);
+        Assert.AreEqual(targetId, publishedIdentity.TargetId);
         Assert.IsTrue(publishedIdentity.IsRelease);
 
         var forbiddenOverride = Path.Combine(artifacts, "override", "application.json");
@@ -137,7 +151,7 @@ public sealed class ProgramDeploymentIntegrationTests
         Assert.AreEqual(programData, InToolkitMinimalEnvironment(() => ProgramDataPath.Root),
             "The OS-known ProgramData path must stay identical when toolkit-only environment variables are absent.");
         LocalFileSystemPolicy.RequireLocalPhysicalPath(programData, "Synthetic ProgramData test parent");
-        var conventionalRoot = Path.Combine(programData, "clc-" + targetId);
+        var conventionalRoot = Path.Combine(programData, "clc-ssrs-web");
         var stagingRoot = "";
         var ownsStaging = false;
         var ownsRoot = false;
@@ -230,6 +244,21 @@ public sealed class ProgramDeploymentIntegrationTests
             var emptyKeys = FileInventory(keyDirectory);
             var success = await RunValidator(publish, configPath, keyDirectory);
             AssertValidation(success, valid: true, releaseId, sourceCommit, "integration-001");
+
+            // Keep legacy path probes inside the owned fixture. Validation must reject them before any file access.
+            var legacyRoot = Path.Combine(artifacts, "clc-" + targetId);
+            var legacyConfig = await RunValidator(publish, Path.Combine(legacyRoot, "Config", "application.json"), keyDirectory);
+            CollectionAssert.Contains(legacyConfig.ErrorCodes, "ConfigurationPathMismatch");
+            var legacyKeyDirectory = Path.Combine(legacyRoot, "Keys");
+            Directory.CreateDirectory(legacyKeyDirectory);
+            try
+            {
+                File.WriteAllText(configPath, AcceptanceConfiguration(legacyKeyDirectory).ToJsonString());
+                var legacyKeys = await RunValidator(publish, configPath, legacyKeyDirectory);
+                CollectionAssert.Contains(legacyKeys.ErrorCodes, "ConfigurationOrKeyStoreInvalid");
+            }
+            finally { File.WriteAllBytes(configPath, configurationBytes); }
+            Assert.AreEqual(0, Directory.GetFileSystemEntries(legacyKeyDirectory).Length);
             AssertInventory(emptyKeys, keyDirectory);
             Assert.IsFalse(Directory.Exists(logDirectory), "Validate-only must not initialize file logging.");
 
@@ -754,7 +783,8 @@ public sealed class ProgramDeploymentIntegrationTests
             string ReadString(string name) => (string)type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public)!.GetValue(identity)!;
             var metadata = assembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToDictionary(attribute => attribute.Key, attribute => attribute.Value);
             var isRelease = (bool)type.GetProperty("IsRelease", BindingFlags.Instance | BindingFlags.Public)!.GetValue(identity)!;
-            return new(ReadString("ApplicationId"), ReadString("ReleaseId"), ReadString("SourceCommit"), metadata["Clc.IdentityKind"]!, isRelease);
+            return new(ReadString("ApplicationId"), ReadString("ReleaseId"), ReadString("SourceCommit"),
+                metadata["Clc.IdentityKind"]!, metadata["Clc.ReleaseTag"]!, metadata["Clc.TargetId"]!, isRelease);
         }
         finally { loadContext.Unload(); }
     }
@@ -813,7 +843,7 @@ public sealed class ProgramDeploymentIntegrationTests
         }
     }
 
-    private sealed record PublishedIdentity(string ApplicationId, string ReleaseId, string SourceCommit, string Kind, bool IsRelease);
+    private sealed record PublishedIdentity(string ApplicationId, string ReleaseId, string SourceCommit, string Kind, string ReleaseTag, string TargetId, bool IsRelease);
 
     private sealed class PublishedAssemblyLoadContext : AssemblyLoadContext
     {

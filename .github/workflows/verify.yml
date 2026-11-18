@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: clcdpc/clc-deployment
-          ref: 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d
+          ref: 785511c6ba8b60afddf0722298f96f02ba163a01
           path: artifacts/toolkit-source
           persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
@@ -94,13 +94,13 @@ jobs:
           if ($LASTEXITCODE) { throw 'Integration.RawCheckoutConfigurationFailed' }
           # Rebuild the owned checkout and its index state under the same settings
           # used by later Git status calls; a one-command override is insufficient.
-          git -C artifacts/toolkit-source checkout --force --detach 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d
+          git -C artifacts/toolkit-source checkout --force --detach 785511c6ba8b60afddf0722298f96f02ba163a01
           if ($LASTEXITCODE) { throw 'Integration.RawCheckoutFailed' }
       - name: Qualify candidate packaging and actual application lifecycle with synthetic IIS
         shell: pwsh
         run: |
           $env:PATH="$env:RUNNER_TEMP/ssrs-per-target-pwsh;"+$env:PATH
-          & "$env:RUNNER_TEMP/ssrs-per-target-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Test-DeploymentIntegration.ps1 -ToolkitSourceRoot "$env:GITHUB_WORKSPACE/artifacts/toolkit-source" -ToolkitSourceCommit 33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d -BuildInputs
+          & "$env:RUNNER_TEMP/ssrs-per-target-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Test-DeploymentIntegration.ps1 -ToolkitSourceRoot "$env:GITHUB_WORKSPACE/artifacts/toolkit-source" -ToolkitSourceCommit 785511c6ba8b60afddf0722298f96f02ba163a01 -BuildInputs
           if ($LASTEXITCODE) { throw 'Integration.SyntheticQualificationFailed' }
       - name: Retain bounded synthetic qualification evidence
         if: always()

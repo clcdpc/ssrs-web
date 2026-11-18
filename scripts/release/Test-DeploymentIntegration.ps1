@@ -14,6 +14,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6') { throw 'This rehearsal requires Windows and PowerShell 7.6.6.' }
+if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'The native ProgramData fixture requires an isolated GitHub-hosted Windows runner.' }
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $toolkit=[IO.Path]::GetFullPath($ToolkitSourceRoot)
 $scriptHash=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -172,7 +173,7 @@ function New-BridgeFixture {
             $fixture.layout[$key]=$conventionalRoot+$fixture.layout[$key].Substring($priorRoot.Length)
         }
     }
-    $fixture.layout.targetId='ssrs-web-dev'
+    $fixture.layout.applicationId='ssrs-web'; $fixture.layout.targetId='ssrs-web-dev'
     $fixture.target.targetId='ssrs-web-dev'; $fixture.target.applicationId='ssrs-web'; $fixture.target.environmentName='DEV'
     $fixture.target.applicationRoot=Join-Path $conventionalRoot 'Application'; $fixture.target.artifactInboxRoot=Join-Path $conventionalRoot 'Inbox'
     foreach ($path in @($fixture.target.applicationRoot,$fixture.target.artifactInboxRoot)) { [void][IO.Directory]::CreateDirectory($path) }
@@ -293,7 +294,7 @@ try {
     Initialize-SsrsNative
     $programData=[SsrsWorkflow.Native]::ProgramData()
     $programDataLease=[SsrsWorkflow.Native]::Pin($programData,$true)
-    $conventionalRoot=Join-Path $programData 'clc-ssrs-web-dev'
+    $conventionalRoot=Join-Path $programData 'clc-ssrs-web'
     # Directory.Move is same-volume create-new: an existing operational root is
     # never opened, enumerated, changed or cleaned by this rehearsal.
     $sibling=Join-Path $programData ('ssrs-bridge-'+[Guid]::NewGuid().ToString('N'))
@@ -336,7 +337,6 @@ try {
     Set-BridgeModuleAdapters $module
     if ($BuildInputs) {
         Test-BridgeCase 'Actual format-3 candidates authenticate independent DEV and Production bootstraps before first execution' {
-            $script:bridgeProgramData=Join-Path $shortRoot 'p'
             function Get-SsrsProgramData { return $script:bridgeProgramData }
             function Assert-SsrsProgramDataEnvironment([string] $Root) {}
             function Assert-SsrsAcl([string] $Path,[bool] $Ancestor) {}
@@ -344,7 +344,15 @@ try {
             try {
                 foreach ($pair in @(@('ssrs-web-dev',$runtimeCandidate),@('ssrs-web-production',$candidate))) {
                     $id=$pair[0]; $zipPath=$pair[1]; $pin=Read-ReleaseJson ([IO.File]::ReadAllBytes(($zipPath+'.identity.json')))
-                    $deployment=Join-Path $script:bridgeProgramData ('clc-'+$id+'\Deployment')
+                    # Each target lives on a separate simulated server with the same relative layout.
+                    $script:bridgeProgramData=Join-Path $shortRoot $id
+                    $layout=& $module {
+                        param($ProgramData,$TargetId,$Version)
+                        function Get-ClcProgramDataRoot { return $ProgramData }
+                        Get-ClcTargetLayout 'ssrs-web' $TargetId $Version
+                    } $script:bridgeProgramData $id $pin.moduleVersion
+                    Assert-Bridge ($layout.targetId -ceq $id -and $layout.targetRoot -ceq (Join-Path $script:bridgeProgramData 'clc-ssrs-web')) 'toolkit enrollment uses the application directory'
+                    $deployment=$layout.deploymentRoot
                     $authorizationRoot=Join-Path $deployment 'enrollment\authorizations'; [void][IO.Directory]::CreateDirectory($authorizationRoot)
                     $lockPath=Join-Path $inputs ($id+'.lock.json')
                     @{schemaVersion=1;repository='clcdpc/clc-deployment';version=$pin.moduleVersion;sourceCommit=$expectedSource;distributionSha256=$pin.distributionSha256;moduleInventorySha256=$pin.inventorySha256} | ConvertTo-Json | Set-Content -LiteralPath $lockPath
@@ -360,13 +368,14 @@ try {
                     Write-TestJson (Join-Path $authorizationRoot ($id+'.json')) $auth
                     $script:SsrsTargetId=$id
                     $opened=Open-SsrsBootstrap $id
-                    try { Assert-Bridge ($opened.root -ceq $bootstrapRoot -and $opened.configurationPath -ceq (Join-Path ([IO.Path]::GetDirectoryName($deployment)) 'Config\deployment.json')) 'canonical target bootstrap/config selection' }
+                    try { Assert-Bridge ($opened.root -ceq $layout.bootstrapRoot -and $opened.configurationPath -ceq $layout.deploymentConfigurationPath) 'SSRS bootstrap discovery matches toolkit enrollment' }
                     finally { foreach ($lease in $opened.leases) { $lease.Dispose() } }
-                    $bootstrapRecords[$id]=@{version=$acquired.version;root=$bootstrapRoot;deployment=$deployment;authorization=$auth}
+                    $bootstrapRecords[$id]=@{version=$acquired.version;programData=$script:bridgeProgramData;deployment=$deployment;authorization=$auth}
                 }
                 Assert-Bridge ($bootstrapRecords['ssrs-web-dev'].version -cne $bootstrapRecords['ssrs-web-production'].version) 'independent candidate versions'
                 $productionBefore=Get-BridgeInventory $bootstrapRecords['ssrs-web-production'].deployment
                 $script:SsrsTargetId='ssrs-web-dev'
+                $script:bridgeProgramData=$bootstrapRecords['ssrs-web-dev'].programData
                 $substitution=Join-Path $bootstrapRecords['ssrs-web-dev'].deployment 'enrollment\authorizations\ssrs-web-dev.json'
                 Write-TestJson $substitution $bootstrapRecords['ssrs-web-production'].authorization
                 $rejected=$false; try { $null=Open-SsrsBootstrap 'ssrs-web-dev' } catch { $rejected=$_.Exception.Message -ceq 'Ssrs.IndependentHandoffInvalid' }
@@ -572,7 +581,7 @@ try {
             try {
                 if ($shortRoot -and [IO.Directory]::Exists($shortRoot) -and [IO.Directory]::GetFileSystemEntries($shortRoot).Length -eq 0) { [IO.Directory]::Delete($shortRoot) }
                 if ($ownedConventional -and $null -eq $global:SsrsBridge.process) {
-                    if ([IO.Path]::GetFullPath($conventionalRoot) -cne (Join-Path $programData 'clc-ssrs-web-dev') -or -not [IO.File]::Exists((Join-Path $conventionalRoot $markerName))) { throw 'Synthetic conventional cleanup ownership lost.' }
+                    if ([IO.Path]::GetFullPath($conventionalRoot) -cne (Join-Path $programData 'clc-ssrs-web') -or -not [IO.File]::Exists((Join-Path $conventionalRoot $markerName))) { throw 'Synthetic conventional cleanup ownership lost.' }
                     foreach ($entry in @(Get-Item -LiteralPath $conventionalRoot)+@(Get-ChildItem -LiteralPath $conventionalRoot -Recurse -Force)) {
                         if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Synthetic conventional cleanup refuses reparse point.' }
                     }
