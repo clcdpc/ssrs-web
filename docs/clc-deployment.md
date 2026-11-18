@@ -29,16 +29,18 @@ The November 18, 2026 read-only check found separate active creation and update/
 
 Confirm Windows Server 2022 x64, IIS, .NET 10 Hosting Bundle/ANCM 20 and trusted HTTPS certificate/binding/DNS. Use separate elevated deployment and nonadministrator AD application identities.
 
-The runner service's PATH must resolve `pwsh` to the approved, globally installed PowerShell **7.6.6** executable. Protect the executable, its parent directories, installed helpers and runner temporary-script locations. Keep the elevated runner's PATH and executable search directories under infrastructure control, with absolute entries protected from changes by untrusted users or repository content. Deployment fails if `pwsh` cannot be resolved or its version differs from 7.6.6.
+The runner service's PATH must resolve `pwsh` to the approved, globally installed executable. DEV and Production require **stable PowerShell 7.6.6 or newer within the 7.x major version**. Administrators can apply routine supported 7.x updates without changing SSRS Web. Deployment rejects older versions, prereleases and PowerShell 8.x or later. GitHub-hosted release builds use a separate exact version pin for reproducibility.
 
-Verify the resolved executable and exact version under the actual deployment identity with the runner service's effective PATH.
+Protect the executable, its parent directories, installed helpers and runner temporary-script locations. Keep the elevated runner's PATH and executable search directories under infrastructure control, with absolute entries protected from changes by untrusted users or repository content.
+
+Under the actual deployment identity and the runner service's effective PATH, verify that the first resolved `pwsh` and the reported process path point to the approved executable. Confirm that the reported version satisfies the stable 7.x requirement.
 
 ```powershell
 Get-Command pwsh -CommandType Application -All | Select-Object -ExpandProperty Source
 pwsh -NoLogo -NoProfile -NonInteractive -Command '(Get-Process -Id $PID).Path; $PSVersionTable.PSVersion.ToString()'
 ```
 
-Inspect actual IIS resources and certificate selectors in IIS Manager or with these read-only commands in **Windows PowerShell 5.1** (native WebAdministration/IIS provider). Use PowerShell 7.6.6 separately for toolkit commands. Retain observations in restricted infrastructure records:
+Inspect actual IIS resources and certificate selectors in IIS Manager or with these read-only commands in **Windows PowerShell 5.1** (native WebAdministration/IIS provider). Use the approved PowerShell 7.x executable for toolkit commands. Retain observations in restricted infrastructure records:
 
 ```powershell
 Import-Module WebAdministration
@@ -85,7 +87,7 @@ The upstream beta.5 Release reports `immutable=false`. Independently verify the 
 
 1. Follow [initial bootstrap provisioning](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#initial-bootstrap-provisioning). In the linked native layout example, set `$applicationId = 'ssrs-web'`, `$targetId = 'ssrs-web-dev'` and `$approvedVersion` to the independently approved version. Prepare the protected namespace and place the authenticated bootstrap under `Deployment\bootstrap`. On a fresh host leave `Deployment\toolkit`, `Deployment\control` and `Deployment\locks` absent for Apply.
 2. Prepare `Config\deployment.json` from the [SSRS enrollment worksheet](operations/README.md#enrollment-approval-inputs) using actual devweb values. Have the selected deployment account run the upstream [read-only observation and candidate procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#3-collect-observations-and-prepare-the-candidate). Infrastructure independently reviews the observations, exact config bytes and permitted operations, then [approves and installs the protected handoff](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#4-independently-approve-and-install-the-handoff).
-3. In a fresh elevated PowerShell 7.6.6 process from the executable verified in Phase 2, run [Inspect and Plan](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#5-inspect-plan-apply-and-verify) as the admitted deployment account using that handoff. Use the native layout from the upstream [host preparation procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#1-inspect-and-prepare-the-host) to set `$bootstrapRoot` and `$hostDeploymentJson`.
+3. In a fresh elevated process from the PowerShell executable verified in Phase 2, run [Inspect and Plan](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#5-inspect-plan-apply-and-verify) as the admitted deployment account using that handoff. Use the native layout from the upstream [host preparation procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#1-inspect-and-prepare-the-host) to set `$bootstrapRoot` and `$hostDeploymentJson`.
 
    ```powershell
    $enrollment = & "$bootstrapRoot\tools\host\Get-ClcHostEnrollment.ps1" `
@@ -113,7 +115,8 @@ The upstream beta.5 Release reports `immutable=false`. Independently verify the 
 2. On a trusted review workstation, confirm the exact producer attempt and immutable canonical publication using the [baseline evidence worksheet](operations/README.md#baseline-approval-inputs). Create a new protected absolute `$reviewDirectory` for that attempt, then download its artifacts with authenticated read-only access.
 
    ```powershell
-   # PowerShell 7.6.6. $runId/$attempt and $artifactId come from authenticated run/artifact metadata.
+   # Use a supported PowerShell 7.x version as described in Phase 2.
+   # $runId/$attempt and $artifactId come from authenticated run/artifact metadata.
    $ErrorActionPreference = 'Stop'
    $PSNativeCommandUseErrorActionPreference = $true
    gh run download $runId --repo clcdpc/ssrs-web --name "ssrs-web-release-$runId-$attempt" --dir "$reviewDirectory\package"

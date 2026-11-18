@@ -78,7 +78,9 @@ function Open-SsrsAutomaticContext($Bootstrap,[string] $AuthorizationId,$Release
 function Invoke-SsrsTagDeploymentEntry {
     $evidence=New-SsrsEvidence
     try {
-        if (-not $IsWindows -or $PSVersionTable.PSVersion.ToString() -cne '7.6.6' -or $env:GITHUB_JOB -cne 'deploy') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
+        $powerShellVersion=$PSVersionTable.PSVersion
+        if (-not $IsWindows -or $powerShellVersion.Major -ne 7 -or $powerShellVersion -lt [semver]'7.6.6' -or
+            $powerShellVersion.PreReleaseLabel -or $env:GITHUB_JOB -cne 'deploy') { Stop-Ssrs 'Ssrs.TrustedWorkflowRequired' }
         $workflowContext=Get-SsrsTagWorkflowContext
         $release=Get-SsrsAuthenticatedTagRelease $workflowContext $env:GITHUB_WORKFLOW_SHA (Join-Path $env:RUNNER_TEMP ([Guid]::NewGuid().ToString('N')))
         $jobs=Get-TagPages ('/repos/clcdpc/ssrs-web/actions/runs/'+$release.run.id+'/attempts/'+$release.run.run_attempt+'/jobs') 'jobs'

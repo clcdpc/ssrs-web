@@ -245,12 +245,29 @@ try {
         Assert-True (-not ($functions -match 'Restore-ClcIisDeployment|Stop-WebAppPool|Start-WebAppPool|Remove-Item|sqlcmd'))
     }
     if ($IsWindows) {
-        Test-Case 'Only exact PowerShell 7.6.6 reaches workflow authentication' {
+        Test-Case 'Only supported stable PowerShell 7.x reaches workflow authentication' {
             . "$PSScriptRoot/Invoke-TagDeployment.ps1"
-            $boundary=@{reached=$false}
+            $boundary=@{authentication=$false;deployment=$false}
             function Get-SsrsTagWorkflowContext {
-                $boundary.reached=$true
+                $boundary.authentication=$true
                 throw 'Synthetic workflow boundary'
+            }
+            function Invoke-SsrsAutomaticDeployment($Release,$Evidence) {
+                $boundary.deployment=$true
+                throw 'Unexpected deployment boundary'
+            }
+            $versions=[ordered]@{
+                '7.5.4'=$false
+                '7.6.5'=$false
+                '7.6.6'=$true
+                '7.6.7'=$true
+                '7.6.9'=$true
+                '7.7.0'=$true
+                '7.8.0'=$true
+                '7.6.6-preview.1'=$false
+                '7.7.0-rc.1'=$false
+                '8.0.0'=$false
+                '8.1.0'=$false
             }
             $originalVersion=$PSVersionTable.PSVersion
             $originalJob=$env:GITHUB_JOB
@@ -258,11 +275,13 @@ try {
             try {
                 $env:GITHUB_JOB='deploy'
                 $env:GITHUB_OUTPUT=$null
-                foreach ($version in @('7.6.5','7.6.6-preview.1','7.6.6','7.6.7')) {
-                    $PSVersionTable.PSVersion=[semver]$version
-                    $boundary.reached=$false
+                foreach ($case in $versions.GetEnumerator()) {
+                    $PSVersionTable.PSVersion=[semver]$case.Key
+                    $boundary.authentication=$false
                     Assert-Fails { Invoke-SsrsTagDeploymentEntry } 'FailedSeeRetainedEvidence'
-                    Assert-True ($boundary.reached -eq ($version -ceq '7.6.6'))
+                    if ($boundary.authentication -ne $case.Value -or $boundary.deployment) {
+                        throw "Unexpected deployment entry behavior for PowerShell $($case.Key)."
+                    }
                 }
             } finally {
                 $PSVersionTable.PSVersion=$originalVersion
