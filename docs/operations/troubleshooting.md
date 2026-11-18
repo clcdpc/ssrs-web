@@ -4,15 +4,15 @@
 
 ## Build-time deployment toolkit
 
-The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.4` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded bytes disagree with the independent archive pin; `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with its lock. Source/version disagreement is rejected by the authenticated distribution verifier. Do not bypass these checks or substitute a legacy module name. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` now indicates an old-format or missing descriptor, including the historical beta.3 PowerShell archive; beta.4 publication is no longer outstanding.
+The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.5` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded bytes disagree with the independent archive pin; `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with its lock. Source/version disagreement is rejected by the authenticated distribution verifier. Do not bypass these checks or substitute a legacy module name. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` now indicates an old-format or missing descriptor, including the historical beta.3 PowerShell archive.
 
-Repeat Windows packaging with actual CLC Release publish output and `scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory <publish> -PublishedToolkit`. The upstream beta.4 GitHub Release reports `immutable=false`, but its exact asset digest is pinned. Successful acquisition/packaging does not establish host runtime installation or activation, enrollment, approved baseline, standing authorization or live DEV/Production acceptance. Those target-local operations require separate authority; the beta.3 ASP.NET Core companion is a separate dependency.
+Repeat Windows packaging with actual CLC Release publish output and `scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory <publish> -PublishedToolkit`. The upstream beta.5 GitHub Release reports `immutable=false`, but its exact asset digest is pinned. Successful acquisition/packaging does not establish host runtime installation or activation, enrollment, approved baseline, standing authorization or live DEV/Production acceptance. Those target-local operations require separate authority; the beta.3 ASP.NET Core companion is a separate dependency.
 
 ## Persistent file logging
 
 `Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. Each caller-owned logging instance stays alive through host shutdown and disposal; concurrent test hosts cannot reconfigure or stop each other. ssrs-web owns `SafeLogLayout`, its output-boundary sanitizer, and explicitly removes default providers so normal events have one sanitized NLog path. Unrelated providers would need their own output policy. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
-Released DEV logs use `%ProgramData%\clc-ssrs-web-dev\Logs\`, and stable Production logs use `%ProgramData%\clc-ssrs-web-production\Logs\`. Native Windows known-folder verification and compiled tag/target metadata select the root; local Synthetic development retains `clc-ssrs-web`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
+DEV and Production each write logs to `%ProgramData%\clc-ssrs-web\Logs\` on their own server. The runtime validates the compiled release identity and resolves the application directory through native Windows ProgramData verification. Local Synthetic development also uses `clc-ssrs-web`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
 
 Files use local dates: `ssrs-web-2026-11-01.log`. Extra files use numbered suffixes, such as `ssrs-web-2026-11-01.001.log`. Entries start with a millisecond timestamp, UTC offset, severity and category. Message, template, JSON properties/scopes and any exception details follow; `---` separates entries. Events use this single text format without routine duplicate files. UTC offsets distinguish repeated daylight-saving hours.
 
@@ -91,7 +91,7 @@ Complete these checks under an authorized DEV host procedure; synthetic file tes
 
 ## Detailed SSRS diagnostics
 
-Edit only the selected release target's protected `Config\application.json`: `%ProgramData%\clc-ssrs-web-dev` for DEV or `%ProgramData%\clc-ssrs-web-production` for stable Production. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration:
+Edit the protected `%ProgramData%\clc-ssrs-web\Config\application.json` on the selected target's server. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration:
 
 ```json
 "Diagnostics": {

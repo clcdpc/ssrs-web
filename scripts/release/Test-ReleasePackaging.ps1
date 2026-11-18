@@ -233,7 +233,9 @@ try {
         $match=[regex]::Match($workflow,'(?ms)^      - name: Prepare raw pinned toolkit checkout\r?\n        shell: pwsh\r?\n        run: \|\r?\n(?<body>.*?)(?=^      - name:)')
         Assert-True $match.Success
         $body=[regex]::Replace($match.Groups['body'].Value,'(?m)^ {10}','')
-        $body=$body.Replace('artifacts/toolkit-source','$fixture').Replace('33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d','$commit')
+        $toolkitLock=Read-ReleaseJson ([IO.File]::ReadAllBytes((Join-Path $repositoryRoot 'deployment/toolkit.lock.json')))
+        Assert-True $body.Contains($toolkitLock.sourceCommit)
+        $body=$body.Replace('artifacts/toolkit-source','$fixture').Replace($toolkitLock.sourceCommit,'$commit')
         $null=& ([scriptblock]::Create($body))
         Assert-True ((Invoke-FixtureGitText $fixture @('config','--local','--get','core.autocrlf')) -ceq 'false')
         Assert-True ((Invoke-FixtureGitText $fixture @('rev-parse','HEAD')) -ceq $commit)
@@ -322,18 +324,34 @@ try {
         $publishedLockPath=Join-Path $repositoryRoot 'deployment/toolkit.lock.json'
         $publishedLock=Read-ReleaseJson ([IO.File]::ReadAllBytes($publishedLockPath))
         $publishedRoot=Join-Path $work 'published-toolkit'
-        Test-Case 'Checked-in lock downloads and verifies the published beta.4 format-3 distribution before canonical import' {
+        Test-Case 'Checked-in lock downloads and verifies the published format-3 distribution before canonical import' {
             $builder=& "$PSScriptRoot/Get-ReleaseToolkit.ps1" -LockPath $publishedLockPath -Destination $publishedRoot
             Assert-True ($builder.executionPinVerified -and -not $builder.hostInstallationAuthorized -and -not $builder.applicationDeploymentAuthorized)
-            Assert-True ($builder.version -ceq '0.1.0-beta.4' -and $builder.sourceCommit -ceq $publishedLock.sourceCommit -and
+            Assert-True ($builder.version -ceq $publishedLock.version -and $builder.sourceCommit -ceq $publishedLock.sourceCommit -and
                 $builder.distributionSha256 -ceq $publishedLock.distributionSha256 -and $builder.moduleInventorySha256 -ceq $publishedLock.moduleInventorySha256)
             $checked=& (Join-Path $publishedRoot 'tools/Test-ToolkitDistribution.ps1') -ArchivePath (Join-Path $publishedRoot 'distribution.zip') -ExpectedSha256 $publishedLock.distributionSha256 -ExpectedSourceCommit $publishedLock.sourceCommit -ExpectedVersion $publishedLock.version -InstalledModuleRoot (Join-Path $publishedRoot 'Clc.Deployment') -RequireInfrastructureTools
             Assert-True ($checked.integrityVerified -and $checked.formatVersion -eq 3 -and $checked.moduleName -ceq 'Clc.Deployment' -and $checked.inventorySha256 -ceq $publishedLock.moduleInventorySha256)
             Assert-True ((Get-ReleaseHash (Join-Path $publishedRoot 'distribution.zip')) -ceq $publishedLock.distributionSha256)
             Import-Module $builder.moduleManifest -Force
             $module=Get-Module Clc.Deployment
-            Assert-True ($module.Name -ceq 'Clc.Deployment' -and $module.Version.ToString() -ceq '0.1.0' -and $module.PrivateData.PSData.Prerelease -ceq 'beta.4' -and
+            $moduleVersion=$module.Version.ToString()
+            $prerelease=$module.PrivateData.PSData['Prerelease']
+            if ($prerelease) { $moduleVersion+='-'+$prerelease }
+            Assert-True ($module.Name -ceq 'Clc.Deployment' -and $moduleVersion -ceq $publishedLock.version -and
                 $module.ModuleBase -ceq (Join-Path $publishedRoot 'Clc.Deployment'))
+        }
+        Test-Case 'The published toolkit derives canonical deployment paths from the application ID for both targets' {
+            $module=Get-Module Clc.Deployment
+            & $module {
+                param($FixtureRoot,$Version)
+                function Get-ClcProgramDataRoot { return $FixtureRoot }
+                foreach ($targetId in @('ssrs-web-dev','ssrs-web-production')) {
+                    $layout=Get-ClcTargetLayout 'ssrs-web' $targetId $Version
+                    if ($layout.targetRoot -cne (Join-Path $FixtureRoot 'clc-ssrs-web') -or $layout.targetId -cne $targetId) {
+                        throw 'Published toolkit must keep application directory and target identity distinct.'
+                    }
+                }
+            } $work $publishedLock.version
         }
         Test-Case 'Published archive rejects incorrect source, version and module inventory pins before module import' {
             foreach ($field in @('sourceCommit','version','moduleInventorySha256')) {
@@ -505,14 +523,12 @@ try {
                     . "$PSScriptRoot/Deployment.Common.ps1"
                     Initialize-SsrsNative
                     $nativeProgramData=[SsrsWorkflow.Native]::ProgramData()
-                    foreach ($targetId in @('ssrs-web-dev','ssrs-web-production')) {
-                        $targetRoot=Join-Path $nativeProgramData ('clc-'+$targetId)
-                        $control=Join-Path $targetRoot ('Deployment\control\'+('a'*64))
-                        foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/*') {
-                            $relative=$entry.FullName.Replace('/','\')
-                            foreach ($prefix in @($targetRoot,(Join-Path $control ('staging\'+('a'*36))),(Join-Path $control ('backups\'+('a'*36))))) {
-                                Assert-True ((Join-Path $prefix $relative).Length -le 240)
-                            }
+                    $applicationData=Join-Path $nativeProgramData 'clc-ssrs-web'
+                    $control=Join-Path $applicationData ('Deployment\control\'+('a'*64))
+                    foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/*') {
+                        $relative=$entry.FullName.Replace('/','\')
+                        foreach ($prefix in @($applicationData,(Join-Path $control ('staging\'+('a'*36))),(Join-Path $control ('backups\'+('a'*36))))) {
+                            Assert-True ((Join-Path $prefix $relative).Length -le 240)
                         }
                     }
                 }
@@ -528,8 +544,8 @@ try {
                     (Get-ReleaseHash (Join-Path $packageCache 'microsoft.data.sqlclient.sni.runtime/7.1.0/LICENSE.txt')))
                 foreach ($entry in $zip.Entries | Where-Object FullName -CLike 'application/THIRD-PARTY-LICENSES/*') {
                     Assert-True ([IO.Path]::GetFileName($entry.FullName).Length -le 39)
-                    $productionStage='C:\ProgramData\clc-ssrs-web-production\Deployment\control\'+('a'*64)+'\staging\'+('a'*36)+'\'+$entry.FullName.Replace('/','\')
-                    Assert-True ($productionStage.Length -le 240)
+                    $stagePath='C:\ProgramData\clc-ssrs-web\Deployment\control\'+('a'*64)+'\staging\'+('a'*36)+'\'+$entry.FullName.Replace('/','\')
+                    Assert-True ($stagePath.Length -le 240)
                 }
                 foreach ($row in $notice.Split([char]10) | Where-Object { $_.StartsWith('| [') }) {
                     $licenseName=[regex]::Match($row,'\]\(THIRD-PARTY-LICENSES/([A-Za-z0-9_.-]+)\)').Groups[1].Value
@@ -568,12 +584,12 @@ try {
             }
         }
         if ($PublishedToolkit) {
-            Test-Case 'Published beta.4 builder packages actual Release output with exact source, target and producer bindings' {
+            Test-Case 'Published builder packages actual Release output with exact source, target and producer bindings' {
                 $output=Join-Path $work 'published-package'; [void][IO.Directory]::CreateDirectory($output)
                 $dependencyHash=Get-ReleaseDependencyLockHash $repositoryRoot
                 $evidence=& "$PSScriptRoot/New-PortalRelease.ps1" -PublishRoot $PublishDirectory -OutputDirectory $output -ToolkitLockPath $publishedLockPath -ToolkitDirectory (Join-Path $work 'published-package-toolkit') -ToolkitArchivePath (Join-Path $publishedRoot 'distribution.zip') -ReleaseId $releaseId -SourceCommit $sourceCommit -ReleaseTag $identity['Clc.ReleaseTag'] -RunId 42 -RunAttempt 2 -DependencyLockSha256 $dependencyHash -WorkflowCommit ('2'*40)
                 Assert-True ($evidence.integrityVerified -and -not $evidence.deploymentApproval -and -not $evidence.hostInstallationApproval -and
-                    $evidence.toolkitBuilder.module -ceq 'Clc.Deployment' -and $evidence.toolkitBuilder.version -ceq '0.1.0-beta.4' -and
+                    $evidence.toolkitBuilder.module -ceq 'Clc.Deployment' -and $evidence.toolkitBuilder.version -ceq $publishedLock.version -and
                     $evidence.toolkitBuilder.sourceCommit -ceq $publishedLock.sourceCommit -and $evidence.toolkitBuilder.distributionSha256 -ceq $publishedLock.distributionSha256 -and
                     $evidence.moduleInventorySha256 -ceq $publishedLock.moduleInventorySha256 -and $evidence.sourceCommit -ceq $sourceCommit -and
                     $evidence.releaseId -ceq $releaseId -and $evidence.runId -eq 42 -and $evidence.runAttempt -eq 2 -and $evidence.workflowCommit -ceq ('2'*40))
@@ -584,7 +600,7 @@ try {
                 $zip=[IO.Compression.ZipFile]::OpenRead($archive)
                 try {
                     $manifest=Read-ReleaseJson (Read-ReleaseEntry ($zip.GetEntry('manifest.json')))
-                    Assert-True ($manifest.builder.module -ceq 'Clc.Deployment' -and $manifest.builder.version -ceq '0.1.0-beta.4' -and
+                    Assert-True ($manifest.builder.module -ceq 'Clc.Deployment' -and $manifest.builder.version -ceq $publishedLock.version -and
                         $manifest.builder.sourceCommit -ceq $publishedLock.sourceCommit -and $manifest.builder.distributionSha256 -ceq $publishedLock.distributionSha256 -and
                         $manifest.source.commit -ceq $sourceCommit -and $manifest.releaseId -ceq $releaseId -and $manifest.build.runId -eq 42 -and
                         $manifest.build.runAttempt -eq 2 -and $manifest.build.job -ceq 'release' -and $manifest.build.workflowPath -ceq '.github/workflows/release.yml' -and

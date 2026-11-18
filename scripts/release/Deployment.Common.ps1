@@ -142,7 +142,7 @@ function Open-SsrsBootstrap([string] $AuthorizationId) {
         $programData=Get-SsrsProgramData
         Assert-SsrsProgramDataEnvironment $programData
         if ($script:SsrsTargetId -cnotin @('ssrs-web-dev','ssrs-web-production')) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
-        $targetRoot=Join-Path $programData ('clc-'+$script:SsrsTargetId)
+        $targetRoot=Join-Path $programData 'clc-ssrs-web'
         $deploymentRoot=Join-Path $targetRoot 'Deployment'
         $authority=Join-Path $deploymentRoot 'enrollment\authorizations'
         if (-not [IO.File]::Exists((Join-Path $authority ($AuthorizationId+'.json')))) { Stop-Ssrs 'Ssrs.Prerequisite.IndependentHostAuthorizationRequired' }
@@ -269,7 +269,7 @@ function Open-SsrsApplicationPreflight($Bootstrap,[string] $AuthorizationId,[boo
             if ($config[$pair[0]] -cne (Join-Path $Bootstrap.targetRoot $pair[1])) { Stop-Ssrs 'Ssrs.FixedTargetMismatch' }
         }
         $logs=Join-Path $Bootstrap.targetRoot 'Logs'; $physical=Get-HProspectivePhysicalPath $logs $session.handles
-        $others=@($config.applicationRoot,[IO.Path]::GetDirectoryName($config.operationalConfigPath),$config.dataProtectionRoot,$config.artifactInboxRoot,$config.enrollmentRoot,$Bootstrap.root,(Get-HAuthorityRoot $script:SsrsTargetId))
+        $others=@($config.applicationRoot,[IO.Path]::GetDirectoryName($config.operationalConfigPath),$config.dataProtectionRoot,$config.artifactInboxRoot,$config.enrollmentRoot,$Bootstrap.root,$session.authorityRoot)
         if ($session.authorization.cutover) { $others+=$session.authorization.cutover.backupRoot }
         foreach ($path in $others) {
             $other=Get-HProspectivePhysicalPath $path $session.handles
