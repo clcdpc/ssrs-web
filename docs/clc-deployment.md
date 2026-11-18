@@ -1,311 +1,180 @@
-# CLC deployment integration
+# Commission SSRS Web DEV on devweb
 
-The general [CLC Deployment Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md) is the architectural authority for tag-driven releases. This runbook supplies the detailed SSRS-specific implementation and acceptance procedures. The current guide, build-time [toolkit lock](../deployment/toolkit.lock.json) and independently installed host runtime are separate dependencies.
+Use this procedure for **devweb**. Select its IIS site, pool, portal hostname and accounts from actual infrastructure. The [Clc.Deployment setup guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md#setup-roadmap) describes the common host lifecycle. SSRS Web uses its existing application-owned release workflow and schema-1 deployment contracts. See the [application operations reference](operations/README.md).
 
-## DEV commissioning phases
+**Live status:** enrollment, baseline, unattended DEV deployment and the seven-check IIS pilot remain **NOT RUN**. Synthetic tests do not establish live IIS, Entra, SSRS, SQL or delivery acceptance. Production requires separate commissioning and evidence.
 
-1. Configure GitHub for the DEV environment and dedicated runner. [GitHub and host configuration prerequisites](#github-and-host-configuration-prerequisites)
-2. Prepare devweb with the required identities, IIS settings and hosting components. [SSRS-specific DEV preflight](#ssrs-specific-dev-preflight)
-3. Provision the protected SSRS Web configuration, key ring and log directory. [External configuration provisioning](operations/README.md#external-configuration-provisioning)
-4. Authenticate and approve the compatible distribution, prepare the protected bootstrap, and enroll `ssrs-web-dev` using the application directory. Authorized enrollment Apply installs and activates the initial runtime. Verify the installed toolkit and `Ready` enrollment. [Toolkit integration and host trust](#toolkit-integration-and-host-trust)
-5. Perform the first deployment under the separate baseline approval. [Initial cutover, baseline and exceptional recovery](#initial-cutover-baseline-and-exceptional-recovery)
-6. Enable standing authorization after the approved baseline succeeds. [DEV and Production tag acceptance](#planned-dev-and-production-tag-acceptance)
+- [1. Configure GitHub](#phase-1--configure-github)
+- [2. Prepare devweb](#phase-2--prepare-devweb)
+- [3. Configure SSRS Web](#phase-3--configure-ssrs-web)
+- [4. Prepare bootstrap and enroll Clc.Deployment](#phase-4--prepare-bootstrap-and-enroll-clcdeployment)
+- [5. Establish the first approved baseline](#phase-5--establish-the-first-approved-baseline)
+- [6. Enable and qualify unattended deployments](#phase-6--enable-and-qualify-unattended-deployments)
 
-## Qualification status
+## Phase 1 — Configure GitHub
 
-| Area | Status and remaining evidence |
-| --- | --- |
-| Code implementation | Target-local release/archive/deploy integration implemented; independent review and CI remain required |
-| CI and synthetic validation | Reproducible checks and their scope are recorded [below](#repeatable-local-checks); they do not establish live deployment |
-| External GitHub configuration | Operator verification of the [native policies, rulesets, environments and runners](#github-and-host-configuration-prerequisites) is still required; this task changes none of them |
-| Build-time toolkit | Published `Clc.Deployment` `0.1.0-beta.5` format 3 is independently pinned and exercised by Windows packaging CI |
-| Compatible runtime toolkit | Authorized enrollment Apply must install and activate the initial runtime, followed by toolkit verification. DEV and Production may use different compatible versions |
-| Initial host enrollment/baseline | Ready enrollment and a successful independently approved baseline, followed by standing authorization, still require host evidence |
-| Live DEV acceptance | NOT RUN, including the tag-driven acceptance and seven-check IIS pilot |
-| Production qualification | NOT RUN; Production provisioning and acceptance require separate evidence |
+Apply upstream [setup sections 2–6](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md#2-restrict-github-actions) to `clcdpc/ssrs-web`. Check inherited rules and runner admission in the [GitHub setup reference](https://github.com/clcdpc/clc-deployment/blob/master/docs/github-setup.md).
 
-The beta.3 ASP.NET Core companion remains pinned and compatible. The published beta.5 PowerShell distribution supplies the canonical `Clc.Deployment/Clc.Deployment.psd1` format-3 layout. The historical beta.3 PowerShell archive remains incompatible and is tested with its historical digest before format rejection. Synthetic and published-artifact packaging tests do not qualify IIS, TLS, runtime identities, persistent keys, Entra, SSRS, SQL or subscription delivery. Complete independent host setup and the approved baseline before enabling standing authorization.
+- Active repository-wide **Restrict actors**, covering all workflows and authorized release developers/automation.
+- Two Active `v*` tag rulesets: **Restrict creations**, with authorized creators' Always allow bypass; separately **Restrict updates/deletions**, without routine creator bypass.
+- Protected `master`, retaining existing review rules and [CI checks](../.github/workflows/verify.yml), blocking force pushes and restricting deletion.
+- Release immutability enabled before publication; canonical application Releases must report Boolean `immutable=true`.
+- Environment `ssrs-web-dev`: **No restriction**, no reviewers, timers or extra gates.
+- Dedicated Windows x64 runner with `[self-hosted, Windows, X64, ssrs-web-dev]` under the elevated deployment identity. Prefer a repository-scoped runner. For an organization-scoped runner, verify repository access and effective admission for eligible tagged workflows. Reserve it for trusted tagged deployments. Tagged deployment code and validators execute elevated.
+- The existing [release.yml](../.github/workflows/release.yml) runs on version-tag pushes. Hosted `release` builds/tests and packages, hosted `archive` publishes, and dedicated `deploy` runs only after successful publication. The optional [setup diagnostic](../.github/workflows/diagnose-deployment.yml) is GET-only and cannot inspect devweb or gate deployment.
 
-SSRS uses the MIT-licensed `Clc.Deployment.AspNetCore` companion; the portal remains AGPL-3.0-only. Package locks and the toolkit lock are authoritative for versions and hashes at build time. Infrastructure authorizes initial toolkit installation through enrollment and later upgrades separately.
+The November 18, 2026 read-only check found separate active creation and update/deletion rulesets. `ssrs-web-dev` still reported a custom policy allowing only the `master` branch. Verify current settings in GitHub and select **No restriction** if that policy is still present. Verify effective actor and `master` protections, Release immutability and runner admission with an administrator.
 
-## Application compatibility
+## Phase 2 — Prepare devweb
 
-- Application ID `ssrs-web` determines `C:\ProgramData\clc-ssrs-web` on both servers. DEV uses target `ssrs-web-dev` and Production uses target `ssrs-web-production`. Both use `Config\application.json` under the application root. Startup and validation use the same bounded reader and application rules; Production/Staging reject temporary-file overrides.
-- Change the nonsecret `Deployment.ConfigurationRevision` on **every** configuration edit or secret rotation. Unchanged-revision byte drift is refused.
-- Keep `DataProtection.KeyRingPath` outside the application root. Use `KeyStoreCompatibilityId=ssrs-web-dpapi-user-v1`, application name `clc-ssrs-web`, Windows user-scope DPAPI and IIS `LoadUserProfile=true`.
-- Infrastructure provisions the key directory; only infrastructure and the runtime account may access it as required. Runtime needs key read/write. Startup must decrypt every retained nonrevoked key before becoming ready.
-- The required `ssrs-user-dpapi` envelope rejects unmarked legacy, machine-scope and plaintext rings. Qualify any migration separately. Application backups do not recover DPAPI profiles, keys or cookies.
+Confirm Windows Server 2022 x64, IIS, .NET 10 Hosting Bundle/ANCM 20, trusted HTTPS certificate/binding/DNS and approved PowerShell **7.6.6** at `C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe`. Protect PowerShell, installed helpers and runner temporary-script locations. Use separate elevated deployment and nonadministrator AD application identities.
 
-The toolkit's validation command is:
+Inspect actual IIS resources and certificate selectors in IIS Manager or with these read-only commands in **Windows PowerShell 5.1** (native WebAdministration/IIS provider). Use PowerShell 7.6.6 separately for toolkit commands. Retain observations in restricted infrastructure records:
 
 ```powershell
-dotnet SsrsPortal.dll --validate-deployment `
-    --configuration-path 'C:\ProgramData\clc-ssrs-web\Config\application.json' `
-    --data-protection-root 'C:\ProgramData\clc-ssrs-web\Keys' --environment Production
+Import-Module WebAdministration
+Get-Website | Select-Object Name, State, PhysicalPath, ApplicationPool
+Get-WebApplication | Select-Object Site, Path, PhysicalPath, ApplicationPool
+Get-WebBinding -Protocol https | Select-Object bindingInformation, certificateHash, certificateStoreName, sslFlags
+Get-ChildItem IIS:\AppPools | Select-Object Name, State, managedRuntimeVersion, managedPipelineMode, enable32BitAppOnWin64
+Get-ChildItem Cert:\LocalMachine\My | Select-Object Subject, Thumbprint, NotAfter
+dotnet --list-runtimes
 ```
 
-Only Production and Staging are supported. Validation emits one version-1 JSON object under 8 KiB and exits 0 only on success. It reads configuration/key metadata without starting the host, logging, listeners, Hangfire, remote clients or key generation. It runs as the deployer, so worker-side startup must still prove DPAPI/profile access.
+Reuse a compatible **dedicated** site/root/pool or provision new resources under infrastructure approval. Set the site root to the canonical `Application` path in Phase 3 and use the approved explicit local IP, HTTPS hostname and SNI certificate. Infrastructure configures a conventional AD pool and its credentials before enrollment. Enrollment can create a missing pool only for an approved, preinstalled managed service account. An occupied root requires [separately authorized legacy cutover](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#optional-legacy-cutover), a stopped pool with zero workers and a verified legacy backup before deleting approved originals.
 
-`GET /health/ready` bypasses authentication/cookie middleware and returns no-store JSON with seven contract fields. It passes only after local startup, persistent-key smoke and ApplicationStarted; unavailable startup, synthetic Development and stopping return 503. It does not test remote services. Other routes retain their normal authorization, and deployment never migrates SQL.
+Apply the [IIS settings and shutdown policy](operations/README.md#host-setup). Confirm SSRS/Entra HTTPS connectivity and runtime-account SSRS permissions. Keep subscriptions and catalog monitoring disabled until their SQL and, for subscriptions, Postmark prerequisites are qualified.
 
-Deployed builds require compiled `ClcIdentityKind=Release`, unique `ClcReleaseId`, full `ClcSourceCommit`, exact `ClcReleaseTag` and its derived `ClcTargetId`. DEV tags compile `ssrs-web-dev`; stable tags compile `ssrs-web-production`. MSBuild rejects missing/contradictory bindings, and packaging, publication, installed-host admission and the automatic adapter compare compiled metadata with the authenticated tag. Beta/RC compile an empty target: they publish artifacts but cannot discover a ProgramData root, pass deployment validation or start. Local Synthetic builds retain `clc-ssrs-web`. Environment selection cannot change the compiled target or application directory. Released startup accepts only Production or Staging before configuration, logging or key setup; Development test overrides require Synthetic builds. Local Synthetic builds cannot pass deployed validation/startup. Identity describes the bytes; the permitted tag push is the release decision, and independent host standing authorization determines whether an eligible routine release may deploy. Initial baseline and exceptional recovery retain separate exact authorization.
+## Phase 3 — Configure SSRS Web
 
-## Immutable release production
+Application ID `ssrs-web` determines the **`C:\ProgramData\clc-ssrs-web`** directory on both separate servers. The native Windows known-folder API resolves the ProgramData parent. `ssrs-web-dev` remains the DEV deployment target, GitHub environment, runner label and enrollment/standing authorization ID. If a former target-derived directory exists, have infrastructure inspect it and obtain separate cutover authority before changing it. Preserve configuration, keys, logs and protected deployment evidence in place for review.
 
-Routine DEV release requires only creating and pushing the version tag at the selected commit:
+| Child | Purpose and runtime access |
+| --- | --- |
+| `Application` | Managed release; read/execute only |
+| `Config` | Protected `application.json` and nonsecret `deployment.json`; read/traverse only |
+| `Keys` | Persistent user-DPAPI ring; runtime read/write |
+| `Inbox` | Approved packages/evidence; deployment-controlled, no runtime writes |
+| `Logs` | Sensitive persistent logs; runtime Modify for rotation/retention |
+| `Deployment` | Infrastructure-controlled `bootstrap`, `enrollment`, `toolkit`, `control` and `locks`; see [protected layout and provisioning](operations/README.md#enrollment-approval-inputs) for creation order |
+
+Protect the parent against runtime replacement/deletion of these physically disjoint siblings. Follow [initial NTFS provisioning](operations/README.md#initial-ntfs-provisioning) for `Config`, `Keys` and `Logs`, or inspect existing resources under independent authority. Use the [configuration provisioning procedure](operations/README.md#external-configuration-provisioning) to copy the reviewed example without overwriting an existing file or use the supported first-run bootstrap. Configure the approved hosts, SSRS catalog policy, Entra tenants and client, revision, key path and logging. Replace every placeholder and protect credential-bearing files and backups.
+
+DEV's runtime environment is **`Production`**. Preserve Data Protection application name `clc-ssrs-web`, compatibility ID `ssrs-web-dpapi-user-v1`, Windows **user-scope** DPAPI and IIS profile loading. Follow [persistent key provisioning](operations/README.md#persistent-data-protection-keys). Every edit or secret rotation needs a new `Deployment.ConfigurationRevision` and restart. See the [configuration reference](operations/README.md#configuration-reference) and [Entra setup](operations/README.md#multi-tenant-entra-onboarding-and-global-catalog-policy).
+
+## Phase 4 — Prepare bootstrap and enroll Clc.Deployment
+
+Use target and enrollment authorization ID **`ssrs-web-dev`**. Independently authenticate and approve a format-3 distribution that supports the application ID-based layout and SSRS Web's schema-1 deployment API. The published [Clc.Deployment 0.1.0-beta.5 release](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.5) supplies that distribution.
+
+```text
+Source commit:       785511c6ba8b60afddf0722298f96f02ba163a01
+Distribution asset:  761701793
+Archive SHA-256:     8f2b3eb22c2aa1749fe7d002866b91d4ec0b247010e6311f804351655e21bee4
+```
+
+The upstream beta.5 Release reports `immutable=false`. Independently verify the archive digest and authenticate the exact source and verifier before use. The [build-time lock](../deployment/toolkit.lock.json) records packaging inputs. Infrastructure approves the host runtime separately. The ASP.NET Core companion remains pinned to beta.3.
+
+1. Follow [initial bootstrap provisioning](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#initial-bootstrap-provisioning). In the linked native layout example, set `$applicationId = 'ssrs-web'`, `$targetId = 'ssrs-web-dev'` and `$approvedVersion` to the independently approved version. Prepare the protected namespace and place the authenticated bootstrap under `Deployment\bootstrap`. On a fresh host leave `Deployment\toolkit`, `Deployment\control` and `Deployment\locks` absent for Apply.
+2. Prepare `Config\deployment.json` from the [SSRS enrollment worksheet](operations/README.md#enrollment-approval-inputs) using actual devweb values. Have the selected deployment account run the upstream [read-only observation and candidate procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#3-collect-observations-and-prepare-the-candidate). Infrastructure independently reviews the observations, exact config bytes and permitted operations, then [approves and installs the protected handoff](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#4-independently-approve-and-install-the-handoff).
+3. In a fresh elevated approved PowerShell process as the admitted deployment account, run [Inspect and Plan](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#5-inspect-plan-apply-and-verify) using that handoff. Use the native layout from the upstream [host preparation procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md#1-inspect-and-prepare-the-host) to set `$bootstrapRoot` and `$hostDeploymentJson`.
+
+   ```powershell
+   $enrollment = & "$bootstrapRoot\tools\host\Get-ClcHostEnrollment.ps1" `
+       -DeploymentConfigurationPath $hostDeploymentJson -AuthorizationId ssrs-web-dev
+   $plan = & "$bootstrapRoot\tools\host\Initialize-ClcHostEnrollment.ps1" `
+       -DeploymentConfigurationPath $hostDeploymentJson -AuthorizationId ssrs-web-dev -Operation Plan
+   $plan | Select-Object HostState, PlannedOperations, ResourceKindsToCreate, NextAction
+   ```
+
+4. Compare the plan with the approved observations, resource scope and authorization. For an authorized `ToolkitNotInitialized` or `TargetNotEnrolled` plan, run Apply with the independently approved archive. Apply installs and activates the initial toolkit and publishes the enrolled target. A Ready target skips Apply. For `Incomplete`, `DriftDetected` or `RecoveryRequired`, preserve evidence and reconcile through infrastructure before proceeding.
+
+   ```powershell
+   & "$bootstrapRoot\tools\host\Initialize-ClcHostEnrollment.ps1" `
+       -DeploymentConfigurationPath $hostDeploymentJson -AuthorizationId ssrs-web-dev `
+       -Operation Apply -DistributionPath "$bootstrapRoot\distribution.zip"
+   & "$bootstrapRoot\tools\host\Get-ClcHostEnrollment.ps1" `
+       -DeploymentConfigurationPath $hostDeploymentJson -AuthorizationId ssrs-web-dev
+   ```
+
+5. Require `HostState=Ready` and `ReadyForDeployment=true`. Compare the installed inventory, archive and protected `activeToolkit` pin with the approval using [installed-toolkit verification](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#verification-and-activation). Infrastructure must set `AutoStart=true` on any pool created by enrollment before deploying. The first application release still needs its own exact approval.
+
+## Phase 5 — Establish the first approved baseline
+
+1. Select an authenticated DEV release at an exact tag and commit. If a release must first be produced, use the [tag commands in Phase 6](#phase-6--enable-and-qualify-unattended-deployments) under the baseline's release scope. Hosted `release` and `archive` can publish before standing authorization exists. Expect downstream deployment refusal, or a queued job if the runner is offline. Cancel any pending deployment for this run before manual commissioning. Confirm publication succeeded even if the overall run failed downstream.
+2. On a trusted review workstation, confirm the exact producer attempt and immutable canonical publication using the [baseline evidence worksheet](operations/README.md#baseline-approval-inputs). Create a new protected absolute `$reviewDirectory` for that attempt, then download its artifacts with authenticated read-only access.
+
+   ```powershell
+   # PowerShell 7.6.6. $runId/$attempt and $artifactId come from authenticated run/artifact metadata.
+   $ErrorActionPreference = 'Stop'
+   $PSNativeCommandUseErrorActionPreference = $true
+   gh run download $runId --repo clcdpc/ssrs-web --name "ssrs-web-release-$runId-$attempt" --dir "$reviewDirectory\package"
+   gh run download $runId --repo clcdpc/ssrs-web --name "ssrs-web-provenance-$runId-$attempt" --dir "$reviewDirectory\provenance"
+   # Retain the outer release-artifact ZIP too; native redirection preserves bytes in this PowerShell.
+   gh api "repos/clcdpc/ssrs-web/actions/artifacts/$artifactId/zip" > "$reviewDirectory\release-transport.zip"
+   Get-FileHash -LiteralPath "$reviewDirectory\release-transport.zip" -Algorithm SHA256
+   ```
+
+   Compare the outer ZIP hash with the authenticated artifact service digest and provenance `artifactTransportSha256`. Confirm that it contains the same `release.zip` as the extracted download. Verify the inner ZIP and manifest separately, reconcile compiled identity and recheck tag and peeled source after download. Reject expired, wrong-attempt or conflicting artifacts.
+
+3. Independently approve the exact package, target and configuration compatibility under the upstream [schema-1 approval contract](https://github.com/clcdpc/clc-deployment/blob/master/docs/contracts.md#existing-protected-authority-and-preflight). Infrastructure selects the approval ID and lineage and enables the independently reviewed record. Integrity inspection and synthetic fixture records carry no deployment authority.
+4. Install the protected `Deployment\toolkit\policy\approvals\<approvalId>.json` and stage the unchanged approved ZIP as `Inbox\<approvalId>.zip`. Recompare its SHA-256 with the approval. In a fresh elevated admitted deployment process, import the verified active manifest:
+
+   ```powershell
+   # $root is the native ProgramData application directory and $approvalId is the exact approved ID.
+   # $activeManifest is the independently verified activeToolkit.moduleManifestPath.
+   Import-Module $activeManifest
+   Test-ClcRelease -ArchivePath "$root\Inbox\$approvalId.zip"
+   $result = Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvalId
+   $result
+   ```
+
+5. Require Deployed, exact anonymous HTTPS `/health/ready`, Started pool with one worker, full installed inventory, generation 1 and a verified empty baseline backup for a fresh target, and matching Completed journal and `attempts/<attemptId>/deployment.json`. Retain approval, original transport ZIP, package/provenance, installed pin, readiness, backup index/current/journal/attempt and IIS observations beyond temporary Actions retention. See [state and readiness contracts](operations/README.md#deployment-contracts-and-verification).
+
+Stop on ambiguous mutation; follow [explicit recovery](operations/troubleshooting.md#deployment-failure-and-explicit-recovery). Application-file recovery does not restore configuration, keys or SQL.
+
+## Phase 6 — Enable and qualify unattended deployments
+
+After the approved baseline succeeds, infrastructure independently approves and installs `Deployment\toolkit\policy\approvals\standing\ssrs-web-dev.json`. Use the [SSRS schema-1 standing authorization fields](operations/README.md#standing-authorization-inputs) and the upstream [protection and read-back procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/automated-deployments.md#configure-standing-authorization).
+
+Use **schema 1** without `sourcePolicy`, matching the [SSRS adapter](../scripts/release/AutomaticDeployment.Adapter.ps1). The [tag verifier](../scripts/release/TagRelease.Common.ps1) already admits unmerged DEV workflow, script and application configuration changes and requires protected `master` ancestry for stable tags.
+
+Verify the runner is online and admitted, publication prerequisites are met and the protected host state matches the approved baseline. Review the [IIS interruption and recovery limits](operations/troubleshooting.md#deployment-failure-and-explicit-recovery) before enabling routine use. For qualification, select an unmerged commit with workflow, deployment-script and application configuration changes, then push an unused newer DEV tag at that exact commit.
 
 ```powershell
-git tag v1.2.3-dev.4
+# $sourceCommit is the verified intended full source commit.
+git tag v1.2.3-dev.4 $sourceCommit
+if ($LASTEXITCODE -ne 0) { throw 'DEV tag creation failed.' }
 git push origin v1.2.3-dev.4
 ```
 
-[release.yml](../.github/workflows/release.yml) runs the application code, workflow, release/deployment scripts and application-owned configuration selected by that exact tagged commit. DEV may select unmerged changes to any of them without PR lookup, review, approval, an open PR, current PR-head equality or master-file equality. Protected operational configuration on the host remains independently controlled. PR closure or branch advancement/deletion does not affect eligibility. GitHub's repository-wide Restrict actors policy controls workflow execution; native tag rulesets control tag creation. Author/tagger metadata grants no authority.
+Observe hosted build/test, immutable publication, then automatic deployment on the dedicated runner. Retain exact tag, source, workflow, run/attempt, producer job, artifact, transport, package, manifest and compiled identities with the deployment result. Match installed inventory and HTTPS readiness to the approved release and configuration revision. Routine operation is a permitted tag push without dispatch, extra approval, activation or routing variables, or PR admission. See [tag bounds and reruns](operations/README.md#release-and-toolkit-reference).
 
-| Tag | Source eligibility | Archive and automatic target |
-| --- | --- | --- |
-| `vMAJOR.MINOR.PATCH-dev.N` | Any selected commit | GitHub prerelease; `ssrs-web-dev` |
-| `vMAJOR.MINOR.PATCH-beta.N` | Any selected commit | GitHub prerelease; no deployment |
-| `vMAJOR.MINOR.PATCH-rc.N` | Any selected commit | GitHub prerelease; no deployment |
-| `vMAJOR.MINOR.PATCH` | Commit contained in protected master history | GitHub Release; `ssrs-web-production` |
+## Separate DEV acceptance
 
-Major/minor/patch are 0..9999 and N is 1..9998, without leading zeroes. Case changes, build metadata and other suffixes are rejected. For Production, select a commit contained in protected master history and push the corresponding stable tag; it need not equal current master HEAD. This change provisions no production infrastructure.
+**All live checks below remain NOT RUN.** Successful first deployment, unattended DEV qualification and complete failure/recovery acceptance are distinct milestones. Run disruptive cases separately in approved maintenance windows; ordinary setup does not require failure simulation.
 
-The single tag-push workflow has ordered jobs `release -> archive -> deploy`. Build/test failure prevents publication; publication failure prevents deployment. Beta/RC stop after archive. Routine operation requires no release dispatch, protected-master completion consumer, formal PR admission, manual deployment approval or additional CLC release-approval service/credential.
+### Seven-check real-IIS pilot
 
-The hosted Windows `release` job verifies exact source bytes and tag/object identity, restores locked dependencies with the SDK in `global.json`, builds/tests, compiles attempt-specific Release identity, exports notices and packages framework-dependent `net10.0/win-x64` without apphost/debug symbols. The authenticated published packaging toolkit has no host deployment authority. Runtime packages exclude SQL/administrative setup, Mock and operational configuration.
+Use distinct healthy A/B. Independently approved application-owned C must pass validation and fail readiness **after replacement/startup**; preflight rejection or generic FailureApp does not qualify checks 5–7. Without C, leave them open.
 
-| Actions artifact | Identity and contents |
+| Check | Expected live result |
 | --- | --- |
-| `ssrs-web-release-<run>-<attempt>` | One `release.zip`; current deployment transport |
-| `ssrs-web-provenance-<run>-<attempt>` | Tag/object/source, workflow revision/run/attempt/job, artifact ID, transport/package/manifest hashes, SDK/dependency/toolkit pins |
-| `ssrs-web-administrative-setup-<run>-<attempt>` | Separate setup tooling/licenses; never executed by routine deployment |
+| 1. Initial A on authorized empty target | Record initial pool state; Deployed; exact A readiness/inventory; Started/one worker; verified empty baseline backup, generation 1, matching Completed journal/attempt |
+| 2. Upgrade B | Exact B readiness/inventory; next generation; complete verified A backup/index; external configuration/keys preserved |
+| 3. Healthy B repeat | NoOp with fresh readiness; unchanged application/current bytes, timestamps and generation; no stop/copy/start/stage/backup; new Completed attempt |
+| 4. Configuration revision 2, apply B | Deployed despite identical release bytes; revision-2 readiness, next generation/backup. Separately prove changed bytes with old revision are refused |
+| 5. Apply C | Bounded Clc.ReadinessFailed after replacement/startup; C not current; stage/manifest/backup retained, RecoveryRequired journal; bounded stop proves zero workers or records uncertainty; retry refused |
+| 6. Verify backups | Earlier backups/indexes byte-identical; failed attempt's verified B backup matches approval/manifest/inventory; failure evidence and external configuration/keys preserved |
+| 7. Explicit RestorePrevious to B | Independently authorized latest-attempt recovery with compatible revision-2 configuration/approvals; verified backup/manifest and helper exit before effects; exact B readiness/inventory; Started/one worker; next generation, before-recovery snapshot/terminal record; original evidence retained |
 
-Only hosted Windows `archive` has `contents: write`. It authenticates the current run/attempt and its completed, successful hosted `release` job while the overall run is in progress. Artifact existence alone cannot qualify. It verifies package/manifest hashes, compiled identity and the authenticated packaging inspector, creates a draft, uploads `release.zip`, `release-provenance.json`, `release-metadata.json`, `SHA256SUMS`, `LICENSE` and `THIRD-PARTY-NOTICES.md`, verifies uploads, rechecks the tag and publishes.
+Use the upstream [seven-check IIS procedure](https://github.com/clcdpc/clc-deployment/blob/master/docs/iis-verification.md#seven-checks) and the [SSRS recovery procedure](operations/troubleshooting.md#deployment-failure-and-explicit-recovery). Synthetic AcceptCandidate evidence does not establish live RestorePrevious acceptance.
 
-Enable GitHub Release immutability before publication for service-enforced asset/tag protection. The first complete published Release reporting Boolean `immutable: true` is canonical; newly published and existing mutable Releases are deliberately rejected. Enabling the repository setting later does not automatically make previously published Releases immutable. Routine deployment never repairs historical release state.
+### Unattended DEV and application qualification
 
-Later builds verify canonical immutability, tag/object/source, classification, metadata and assets without changing any canonical asset. Incomplete drafts and conflicting archives fail closed. Archive concurrency and create-race validation prevent replacement.
+- Retain the results from [Phase 6](#phase-6--enable-and-qualify-unattended-deployments), including the tag object and peeled source commit.
+- Separately qualify build/test failure blocking publication, publication failure blocking deployment, beta/RC without deployment, same-tag full-run rebuild, supersession, revoked standing policy and downgrade refusal. Preserve evidence. Published tags and canonical assets stay fixed.
+- Complete the [live application gates](operations/README.md#live-gate-checklist), logging, optional services and [known-record report-boundary acceptance](date-parameter-boundary-acceptance.md); synthetic parsing/SOAP does not close them.
 
-For a fresh build of the same tag, rerun **all jobs** of its original push run: `gh run rerun <run-id> --repo clcdpc/ssrs-web`. The attempt changes and the package gets a distinct compiled identity and artifact. Canonical assets stay intact; deployment uses the newly verified Actions artifact. Reusing a run/attempt identity with different artifact/package hashes is refused. Rerunning only archive/deploy cannot qualify a previous attempt's producer; rerun all jobs. Actions artifacts expire after 30 days; create a new deliberate version tag when rerun/artifact availability has expired. See [GitHub rerun behavior](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+### Production remains separate
 
-## Tag-driven automatic deployment
-
-Successful archival automatically routes DEV/stable tags for application ID `ssrs-web` to their target. GitHub environment, dedicated runner label, deployment target, host authorization ID and standing authorization ID all use `ssrs-web-dev` or `ssrs-web-production`. These are separate protected resources sharing a naming convention. Runner selection is `[self-hosted, Windows, X64, <target-id>]`; no routing variables or runner selectors are required.
-
-The elevated job downloads only the fixed deployment-script list from the tagged workflow commit, checking Git blob hashes against its tree. After queueing it repeats tag/object/source, workflow/run/attempt, successful release/archive job and artifact/hash verification. It authenticates the independently installed toolkit, requires Ready enrollment and application preflight, and checks the protected target before invoking deployment. Package contents cannot replace the installed toolkit, enrollment, infrastructure configuration, standing policy, credentials or host security policy. Packaged scripts never execute.
-
-DEV and production have separate target concurrency groups with `cancel-in-progress: false`. GitHub does not promise FIFO; a newer eligible tag supersedes an older release even if its build failed or is pending. Same-tag attempts retain toolkit ordering and downgrade protection. Identical current identity reaches fresh-readiness NoOp. Locking, backups, readiness, failure propagation and operator-directed recovery keep existing toolkit semantics.
-
-### GitHub and host configuration prerequisites
-
-Provision these once through separate repository/infrastructure administration, following the [Setup Guide](https://github.com/clcdpc/clc-deployment/blob/master/docs/setup-guide.md):
-
-1. In **Repository Settings > Actions > Policies**, create an **Active Restrict actors** policy covering **all repository workflows**, selecting the authorized release developers/automation. Review effective organization/enterprise policy too. This native execution policy does not grant tag-creation permission.
-2. In **Repository Settings > Rules > Rulesets**, create **two Active tag rulesets**, both matching **`v*`**:
-
-   | Ruleset | Restrictions | Bypass configuration |
-   | --- | --- | --- |
-   | Release tag creation | **Restrict creations** only | Authorized release-developer team with **Always allow** bypass; an empty list or pull-request-only bypass does not permit tag creation |
-   | Immutable release tags | **Restrict updates** and **Restrict deletions** | No routine release-developer bypass |
-
-   A bypass applies to **all restrictions in its ruleset**. Keep creation separate so authorized developers can create tags while ordinarily being unable to move or delete existing ones. Review inherited rulesets, patterns, exclusions and bypass membership together; a creation bypass cannot override a different applicable restriction.
-3. Protect **master** against force pushes and deletion, preserving the application's existing required CI checks from [verify.yml](../.github/workflows/verify.yml). No additional PR-branch protection is required.
-4. Separately enable **Repository Settings > General > Releases > Release immutability** **before publication** (or verify owner-enforced immutability). Tag rulesets alone do not establish immutable Release assets; canonical Releases must report Boolean `immutable: true` as described above.
-5. Create **ssrs-web-dev** and **ssrs-web-production** environments. For **both**, set **Deployment branches and tags: No restriction**, with **no required reviewers, wait timers or additional deployment protection gates**.
-6. Register dedicated **Windows x64 self-hosted** deployment runners. **Repository-scoped runners are preferred**, with labels `self-hosted`, `Windows`, `X64` and the derived target ID. They require no runner group or protected-master workflow allowlist. **Organization-scoped runners are an alternative** when their group grants this repository access. Build/test/archive stay on GitHub-hosted Windows; ordinary Linux/browser CI stays on GitHub-hosted Ubuntu with its existing trusted-contributor admission.
-7. Complete [host enrollment and installed toolkit verification](#toolkit-integration-and-host-trust) using protected host authorization named `<target-id>`, then deploy the [separately approved initial baseline](#initial-cutover-baseline-and-exceptional-recovery). **Only after the baseline succeeds**, provision enabled target-scoped [standing authorization](https://github.com/clcdpc/clc-deployment/blob/master/docs/automated-deployments.md) named `<target-id>`, bound to this repository, `release.yml`/`release`, channel, target and lineage. DEV policy must permit unmerged DEV tags.
-
-Naming grants no authority: missing, invalid or revoked host/standing authorization prevents deployment. Standing authorization persists until changed or revoked; it is not another human approval for every version tag. No deployment activation flags, per-PR configuration, manual release dispatch, recurring GitHub changes or extra actor database are required. The optional GitHub setup diagnostic is independent of release jobs. This implementation changes no live GitHub settings or infrastructure.
-
-### Toolkit integration and host trust
-
-The reviewed [verified-workflow contract at 33777ec](https://github.com/clcdpc/clc-deployment/blob/33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d/docs/verified-workflow-integration.md) defines the boundary in [AutomaticDeployment.Adapter.ps1](../scripts/release/AutomaticDeployment.Adapter.ps1):
-
-```powershell
-Invoke-ClcIisDeployment -TargetId $target -StandingAuthorizationId $target `
-    -ReleaseTag $tag -ArchivePath $verifiedInboxZip -VerifiedReleasePath $verifiedIdentityJson
-```
-
-The tagged adapter creates unique ZIP/identity files in the authenticated target inbox. This evidence binds repository/tag/source, compiled target, manifest/package hashes and producer run/attempt/job/artifact/transport; it grants no authority. The independently installed target-local toolkit enforces standing scope/revocation, baseline/lineage, rebuild ordering and downgrade policy under the selected target's OS file lock, then performs its existing backup/readiness lifecycle. Application releases cannot enroll infrastructure, install/activate a toolkit, approve downgrades or authorize exceptional recovery.
-
-The **build-time** [lock](../deployment/toolkit.lock.json) authenticates published [`0.1.0-beta.5`](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.5), verified against the [merged correction](https://github.com/clcdpc/clc-deployment/pull/11), annotated tag `12a7c5c5b64fb2b904276d6ff8ee0c9f70cdd486`, [producer run](https://github.com/clcdpc/clc-deployment/actions/runs/44227660335), published manifest and downloaded bytes. A local rebuild from the tagged source matched the archived payload files and both inventories:
-
-| Identity | Verified value |
-| --- | --- |
-| Source commit | `785511c6ba8b60afddf0722298f96f02ba163a01` |
-| Distribution asset | `Clc.Deployment-0.1.0-beta.5.zip`, ID `761701793`, 465022 bytes |
-| Archive SHA-256 | `8f2b3eb22c2aa1749fe7d002866b91d4ec0b247010e6311f804351655e21bee4` |
-| Module inventory SHA-256 | `3e5cbffac9ab1a0e3ee0db2ebd7ac1016bcf787f5181faf284a06a467a12689e` |
-| Published manifest | Asset `761701749`, SHA-256 `8731c0fe9da4151139530c3b194ea5e6b7535b610ce06c0a37026336d885b1c5` |
-
-The existing verifier derives and validates the module, source and required infrastructure inventories after independent archive authentication and before module import. The upstream beta.5 Release reports `immutable=false`; the exact pinned digest authenticates execution, and SSRS Web's own canonical application-release immutability requirement remains unchanged. This build pin grants no host installation, activation or application deployment permission. Local candidate distributions remain test evidence only.
-
-1. Independently authenticate and approve a compatible distribution with the application ID-based layout. Prepare the host prerequisites and protected bootstrap at `%ProgramData%\clc-ssrs-web\Deployment\bootstrap`. The bootstrap contains exactly `Clc.Deployment`, `tools`, `source.commit` and `distribution.zip`. The `distribution.json` descriptor stays inside the archive. Independently approve the bootstrap's executable inventory, source and complete ZIP before first execution. [Initial bootstrap provisioning](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#initial-bootstrap-provisioning)
-2. Prepare protected `Config\deployment.json` using the reviewed nonsecret [deployment example](../deployment/deployment.example.json), collect host observations and provision independent enrollment authorization. Run Inspect and Plan using the authenticated bootstrap and review the plan against that authorization. [Host enrollment](https://github.com/clcdpc/clc-deployment/blob/master/docs/host-enrollment.md)
-3. Run enrollment Apply under the exact independent authorization. Apply installs the initial runtime under `Deployment\toolkit\versions\<version>` and activates the approved pin. Do not preinstall a runtime under `Deployment\toolkit`. [First authorized toolkit installation](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#first-authorized-toolkit-installation)
-4. Confirm `Ready` and `ReadyForDeployment=true`, then verify the installed module, retained ZIP and active policy against the approved pins. [Verification and activation](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#verification-and-activation)
-
-Each target root contains sibling `Application`, `Config` (`application.json` and `deployment.json`), `Keys`, `Inbox`, `Logs` and protected `Deployment`. After enrollment, `Deployment` contains `bootstrap`, `toolkit/versions/<version>`, `toolkit/policy/host-policy.json`, `toolkit/policy/targets/<target-id>.json`, approvals, `enrollment/authorizations`, immutable enrollment evidence, its own enrollment lock, `locks` and `control`. The local catalog contains only its target. DEV and Production independently approve their own runtime versions. An installed module must match its canonical target path and exact protected active pin.
-
-If a host has an existing target-derived directory, independently inspect its configuration, key ring, logs, enrollment, and recovery evidence before arranging a separately approved cutover. SSRS Web uses only the canonical directory and performs no migration.
-
-Keep application, Config, Keys, Inbox, control state, bootstrap, authorizations, backups and Logs physically disjoint. The workflow authenticates path/owner/ACL and complete retained toolkit bytes before bootstrap execution and holds leases through use. Authenticate PowerShell 7.6.6 separately at `C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe`, protect its ancestors/module paths and runner temporary scripts, and independently provision IIS/.NET/TLS/accounts. Administrators remain a procedural trust boundary.
-
-## Read-only deployment prerequisite validation
-
-[diagnose-deployment.yml](../.github/workflows/diagnose-deployment.yml) calls the current GET-only GitHub setup checker pinned to reviewed toolkit source `33777ec2c4cfc70c86c102f5cb38502d0a8f4f1d`. It is optional and never gates routine releases. It has no host runner, activation flag, routing setting or repair operation. Inaccessible administrative APIs remain unverified.
-
-For separately authorized read-only host inspection, authenticate the selected target's exact bootstrap first, then run its `Get-ClcHostEnrollment.ps1` or `Initialize-ClcHostEnrollment.ps1 -Operation Plan` against the exact `Config\deployment.json` and target-local authorization. Apply and application deployment require their independent approvals. Run the SSRS checklist below as well; GitHub observations and enrollment state do not establish application readiness.
-
-## SSRS-specific DEV preflight
-
-Use the authenticated bootstrap for enrollment and the verified active runtime for application deployment and recovery. Follow the [toolkit setup sequence](#toolkit-integration-and-host-trust), [deployment and recovery](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md) and [IIS verification](https://github.com/clcdpc/clc-deployment/blob/master/docs/iis-verification.md) procedures alongside this checklist.
-
-The bootstrap's `Get-ClcHostEnrollment.ps1` and `Initialize-ClcHostEnrollment.ps1 -Operation Plan` are read-only. `Ready` requires no initialization. `ToolkitNotInitialized` or `TargetNotEnrolled` can proceed only with independently authorized Apply. `Incomplete`, `DriftDetected` or `RecoveryRequired` requires reconciliation. Verify application approval, settings and readiness separately.
-
-| Check | Required host evidence |
-| --- | --- |
-| Platform/IIS | Windows Server 2022 x64, pinned PowerShell, .NET 10 Hosting Bundle/ANCM 20; dedicated site/root/pool, 64-bit Integrated/No Managed Code, one worker, AutoStart, Load User Profile and no overlapping rotation |
-| Identities | Conventional AD runtime account outside Administrators: application read/execute, configuration read, keys read/write, Logs Modify; no writes to application/toolkit/control. Separate elevated CLC deployment account for content/pool control |
-| Configuration/keys | Protected external files; target label DEV but application environment **Production**, never Development; new revision for every edit; required user-DPAPI policy and worker key persistence across recycle |
-| Authorization | Protected bootstrap/host authorization, independently approved baseline and enabled target-scoped standing authorization for routine releases. Build success or toolkit Ready is not deployment authority |
-| TLS/readiness | Approved HTTPS hostname/binding/SNI, certificate access/SAN/chain/revocation and correct `/health/ready` routing. No TLS bypass, authentication redirects or report-route warmup |
-| ANCM/subscriptions | Inherited locked ANCM 60-second shutdown setting. When subscriptions are enabled: canonical Application Initialization module, preload, initialization after restart, AlwaysRunning, idle timeout zero, pool shutdown grace at least 90 seconds |
-| SQL/delivery | Separately provision approved SsrsWeb/Hangfire schemas, runtime grants and provider settings; qualify delivery. Deployment does not migrate or restore database state |
-| Logs/backups | `%ProgramData%\clc-ssrs-web\Logs` disjoint from managed/protected paths; verify runtime Modify access for rotation/retention. Retain application backups/failure evidence; separately back up configuration, keys and SQL |
-
-The workflow observes settings; it does not repair them or ACLs. A protected read-only toolkit token is needed only for private asset access; it is never sent to the CDN. Details: [host setup](operations/README.md#host-setup), [subscription provisioning](operations/subscriptions.md#production-provisioning-and-deployment), [Logs ACLs](operations/troubleshooting.md#initial-ntfs-provisioning).
-
-## IIS prerequisites and reboot limitation
-
-Enrollment creates a new pool with `AutoStart=false`. An independently authorized administrator must set it true before deployment; the workflow refuses false/unavailable values and never changes them.
-
-For enabled subscriptions, install Application Initialization separately. The global `ApplicationInitializationModule` image must be the canonical full IIS `warmup.dll` path without a precondition, and the effective site module must have empty type/precondition. Macros such as `%IIS_BIN%`, relative paths and unresolved images are refused. Global registration alone is insufficient. Missing prerequisites stop deployment; correct them through administration, then rerun.
-
-**Reboot limitation:** the toolkit has no activation fence/startup hook. Reboot or external WAS activation during physical replacement can start mixed files and require manual recovery. Ordinary replacement failure attempts a bounded stop and preserves backup/stage/attempt state. Do not enable deployment without accepting this operational tradeoff.
-
-## Preserving shutdown and subscription hosting
-
-Infrastructure must set this site-specific parent policy in protected `applicationHost.config`, outside the application root:
-
-```xml
-<location path="ExampleSsrsWeb" overrideMode="Allow">
-  <system.webServer>
-    <aspNetCore shutdownTimeLimit="60" lockAttributes="shutdownTimeLimit" />
-  </system.webServer>
-</location>
-```
-
-The workflow requires the enrolled site, exact value and attribute lock. Shared-configuration redirection is refused unless enabled is absent or exactly false (case-insensitive); `configSource` and unsupported layouts are refused.
-
-A locked child attribute is invalid even when its value matches. Before binding the legacy cutover inventory, infrastructure must stop/fence the pool and remove its old child `shutdownTimeLimit`, preserving the original separately. The workflow does not edit it. This retains the ANCM60/Host45/Hangfire30 budget; verify actual inheritance and graceful shutdown on the host.
-
-Preflight rejects obsolete/test configuration keys from machine/pool/application settings without logging values. Subscription requirements are conditional on enabled configuration; after separate administration, rerun the workflow. Alternatively start with reviewed subscriptions-disabled configuration and enable later with a new revision. Full validation remains authoritative and preflight never connects to SQL.
-
-## Initial cutover, baseline and exceptional recovery
-
-Use the protected bootstrap for [initial enrollment and toolkit installation](#toolkit-integration-and-host-trust). Baseline deployment, later toolkit upgrades and exceptional recovery require separate administrative procedures and authorization. These administrative operations run outside the tag workflow.
-
-For a legacy cutover, stop and fence the pool with zero workers and independently authorize the full legacy inventory, physical identity and disjoint backup before enrollment Apply. The toolkit removes only approved legacy files. Unknown/partial state requires reconciliation. A legacy backup cannot become prior toolkit release history.
-
-Standing authorization requires a successfully deployed, independently approved baseline on a Ready target. Infrastructure uses a separately approved exact release for that initial deployment. Routine workflows neither generate this approval nor establish their own baseline.
-
-Recovery remains operator-directed against the latest failed attempt. Retain authoritative journals, exact approvals, verified packages, backups, configuration and keys outside temporary Actions retention:
-
-```powershell
-Import-Module $independentlyVerifiedActiveManifest
-Restore-ClcIisDeployment -TargetId ssrs-web-dev -AttemptId $latestAttempt `
-    -Mode RestorePrevious -Reason $incidentReference -RecoveryApprovalId $independentExactApproval
-```
-
-A generated-release recovery needs its independently authorized matching schema-1 recovery approval. AcceptCandidate/RestoreEmpty require their own admissibility and authority. Never automatically restore, retry ambiguous mutation, restart legacy code, delete journals/locks or fabricate approvals. Application recovery does not imply database rollback safety.
-
-## Planned real-DEV seven-check pilot
-
-**All seven live checks remain NOT RUN.** Run each operation separately in an authorized maintenance window and inspect its result before proceeding. Releases A/B must be healthy and distinct; separately approved application-owned C must pass validation but fail readiness **after replacement/startup**. Preflight rejection does not test recovery. Without a suitable C, checks 5–7 remain NOT RUN; do not add a production failure switch or use the generic FailureApp instead.
-
-| Check | Required result |
-| --- | --- |
-| 1. Deploy A to an authorized empty target | Record initial pool state; Deployed; exact A readiness/inventory; Started/one worker; verified empty baseline backup, generation 1 and matching Completed journal/snapshot |
-| 2. Upgrade to B | Exact B readiness/inventory; next generation; complete verified A backup/index; unchanged external configuration/keys |
-| 3. Reapply B | NoOp with fresh readiness; unchanged application/current bytes, timestamps and generation; no stop/copy/start/stage/backup; new Completed attempt |
-| 4. Change configuration to revision 2, apply B | Deployed despite identical release bytes; revision-2 readiness, next generation and backup. Separately verify changed bytes with the old revision are refused |
-| 5. Apply C | Bounded Clc.ReadinessFailed after replacement/startup; C not current; retained stage/manifest/backup and RecoveryRequired journal; bounded stop proves zero workers or records uncertainty; ordinary retry refused |
-| 6. Inspect backups before recovery | Earlier backups/indexes byte-identical; failed attempt's verified B backup matches approval/manifest/inventory; all failure evidence retained; configuration/keys remain external |
-| 7. Restore B from latest failed attempt | Authorized RestorePrevious with compatible revision-2 configuration and current approvals; verified backup/manifest, exited helpers before effects, exact B readiness/inventory, Started/one worker, next generation, before-recovery snapshot/terminal record; original evidence retained |
-
-```powershell
-Import-Module $independentlyVerifiedActiveManifest
-Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedA
-Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedB
-Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedB # NoOp
-# Infrastructure changes configuration to approved revision 2.
-Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedB
-Invoke-ClcIisDeployment -TargetId ssrs-web-dev -ReleaseApprovalId $approvedC
-# Inspect failed attempt and all backups before explicitly restoring B.
-Restore-ClcIisDeployment -TargetId ssrs-web-dev -AttemptId $latestFailedAttemptId `
-    -Mode RestorePrevious -Reason $nonsecretIncidentReference -RecoveryApprovalId $independentExactApproval
-```
-
-The synthetic fixture's AcceptCandidate case does not establish live RestorePrevious acceptance. Record actual host observations before changing any live status.
-
-## Planned DEV and Production tag acceptance
-
-**Both channels remain NOT RUN.** Verify GitHub setup, complete authorized enrollment and verify the installed toolkit, then deploy the separately approved baseline. Establish standing authorization for each target after its baseline succeeds. The seven-check pilot above is separately authorized commissioning/recovery work; its explicit approvals are not the routine tag procedure.
-
-1. **DEV:** Select an unmerged commit containing workflow, deployment-script and application-owned configuration changes, without requiring a PR or master-file equality. Create and push a new permitted `vN.N.N-dev.N` tag at that exact commit. Observe hosted `release -> archive` success, an immutable canonical prerelease, then automatic `deploy` on the dedicated `ssrs-web-dev` runner/environment. Retain tag/object/source/workflow/run/attempt/job/artifact/transport/package/manifest/compiled identities, host outcome and exact readiness. Complete the [SSRS-specific preflight](#ssrs-specific-dev-preflight), [seven-check pilot](#planned-real-dev-seven-check-pilot) and [live application gates](operations/README.md#live-gate-checklist).
-2. **Failure and ordering:** In separately authorized acceptance cases, verify build/test failure blocks publication, publication failure blocks deployment, beta/RC archive without privileged deployment, same-tag full-run rebuild preserves canonical assets and uses distinct build identity, newer eligible tags supersede older ones, and revoked standing policy/downgrades fail closed. Preserve host evidence and follow [exceptional recovery](#initial-cutover-baseline-and-exceptional-recovery) for failed mutation; do not move tags or repair canonical assets.
-3. **Production:** Independently qualify the Production host/configuration/keys/identities and baseline, then enable its standing authorization. Select an exact commit contained in protected master history (including an older ancestor, not just HEAD), create/push a new stable `vN.N.N` tag and observe the same ordered hosted qualification/publication followed by `ssrs-web-production` deployment. Reconcile all identities, exact readiness, backups and application acceptance with the Production target; DEV evidence alone does not qualify Production. Synthetic admission must also refuse a stable source outside master before publication/deployment.
-
-After commissioning, routine operation for either target is only creating and pushing its permitted version tag. Retain deployment and recovery evidence beyond temporary Actions artifact retention.
-
-## Repeatable local checks
-
-Offline GitHub API and host fixtures cover unmerged DEV workflow/script changes without PR lookups, stable ancestry, in-progress same-run qualification, failed/incomplete jobs, exact run/attempt/artifact identity, canonical compatibility, routing, supersession and authorization rejection. Transport/package ZIP hashes and a clean-process publisher test exercise actual validation/publication code. Generated evidence stays under ignored `artifacts/`; implementation creates no real version tags or Releases.
-
-The GitHub-hosted Windows checks compile DEV and stable Production releases, verify their distinct compiled target IDs and confirm native discovery of `clc-ssrs-web`, protected configuration, fixed keys, persistent DPAPI startup and anonymous loopback readiness. Tests that need the native application directory use a create-new, marker-owned fixture on disposable hosted Windows runners. Negative builds reject missing/invalid/contradictory target metadata; beta/RC builds refuse discovery, validation and startup. Bootstrap tests reject wrong inventories, target substitution, extra files, named streams and forged inherited roots before import. Complete actual publish/archive inventories are checked against the canonical root and stage/backup/recovery path budgets; long generated license leaves are bounded with full package/source/license-digest provenance.
-
-`Test-DeploymentIntegration.ps1 -BuildInputs` independently verifies exact toolkit source `785511c6ba8b60afddf0722298f96f02ba163a01`, builds unpublished format-3 test candidates, packages actual compiled SSRS releases with build toolkit `0.1.0-dev.2`, and runs the separately pinned `0.1.0-dev.1` runtime through the existing lifecycle/recovery engine. Its target root is exclusively create-new and marker-owned; an existing namespace is left untouched. IIS, platform, access and runtime-identity observations remain synthetic. NTFS replacement/state/backup checks, helper processes, DPAPI and loopback application readiness are real. The dedicated GitHub-hosted Windows CI job repeats this fixture without accessing deployment runners or credentials. Generated evidence remains ignored under `artifacts/`.
-
-On a disposable GitHub-hosted Windows runner, use a clean reviewed toolkit checkout and the pinned PowerShell 7.6.6:
-
-```powershell
-pwsh -NoProfile -File ./scripts/release/Test-DeploymentIntegration.ps1 `
-    -ToolkitSourceRoot '<exact clean raw-byte checkout>' `
-    -ToolkitSourceCommit 785511c6ba8b60afddf0722298f96f02ba163a01 -BuildInputs
-```
-
-The Windows compatibility job also runs `Test-ReleasePackaging.ps1 -PublishDirectory <actual CLC Release publish> -PublishedToolkit`. This opt-in path downloads beta.5 through the checked-in asset URI, authenticates its archive before evaluating its verifier, checks format 3 and canonical import, packages actual Release output and validates builder/source/compiled target/producer bindings. Negative tests reject wrong source, version and inventory pins; offline tests cover wrong archive digests, invalid/duplicate/case-colliding entries and legacy names. The historical beta.3 archive is authenticated with its historical lock before format rejection. Omitting `-PublishedToolkit` keeps ordinary tests offline; the separate `dev.2` builder/`dev.1` runtime rehearsal uses candidates built from the corrected source.
-
-Independently authorized enrollment (including initial toolkit installation and activation), installed toolkit verification, the approved baseline, standing authorization and live acceptance remain outstanding. Packaging tests create no GitHub Release and perform no enrollment, IIS changes or deployment.
-
-The [DEV and Production tag acceptance](#planned-dev-and-production-tag-acceptance), all seven live IIS checks and known-record SSRS report-boundary acceptance remain open. Production infrastructure is unchanged.
-
-From the repository root:
-
-```powershell
-dotnet restore SsrsPortal.slnx --locked-mode
-dotnet build SsrsPortal.slnx -c Release --no-restore
-dotnet test SsrsPortal.slnx -c Release --no-build
-pwsh -NoProfile -File scripts/release/Test-DevDeployment.ps1
-pwsh -NoProfile -File scripts/release/Test-TagDeployment.ps1
-pwsh -NoProfile -File scripts/release/Test-ReleaseArchive.ps1
-pwsh -NoProfile -File scripts/release/Test-DeploymentReadiness.ps1 -ActionlintPath <approved-actionlint-1.7.12-executable>
-pwsh -NoProfile -File scripts/release/Test-ReleasePackaging.ps1
-```
-
-Use the [README verification](../README.md#verification) for ordinary publish/browser checks and the [Windows compatibility CI job](../.github/workflows/verify.yml) for exact `win-x64` Release publish arguments. Pass both `-PublishDirectory` and `-OrdinaryPublishDirectory` to check those actual outputs. The packaging script's optional Windows/toolkit interoperability branch additionally needs `-SyntheticToolkitArchive` and `-SyntheticToolkitLock`. Never copy its synthetic pin into production configuration.
-
-For the combined Windows fixture:
-
-```powershell
-pwsh -NoProfile -File scripts/release/Test-DeploymentIntegration.ps1 `
-    -ToolkitSourceRoot <clean-exact-toolkit-clone> `
-    -ToolkitSourceCommit <exact-toolkit-commit> `
-    -ReleaseArchivePath <compiled-synthetic-initial.zip> `
-    -UpgradeReleaseArchivePath <distinct-compiled-synthetic-upgrade.zip> `
-    -StandingReleaseArchivePath <compiled-synthetic-run-101.zip> `
-    -RebuildReleaseArchivePath <same-source-compiled-run-102.zip>
-```
-
-It owns an absent-only conventional ProgramData fixture and exercises the real module/compiled app with synthetic IIS and loopback readiness, not live IIS/SQL. It checks upgrade/NoOp/configuration restart, failed readiness/retry refusal, AcceptCandidate and backup/key/configuration preservation. The optional standing/rebuild pair exercises the actual adapter with missing/revoked policy, provenance mismatch, Deployed/NoOp, distinct same-tag packages, old-build/downgrade rejection and revocation after admission. Both packages must share a source commit and have distinct compiled release/run identities. Windows DPAPI checks skip on Linux; missing platform prerequisites are not passes.
+Commission Production on its separate server using the same application directory and independent identities, configuration, keys, runtime approvals and evidence. `ssrs-web-production` is its target, GitHub environment, runner label and enrollment/standing authorization ID. Stable `vMAJOR.MINOR.PATCH` requires protected `master` ancestry, including older ancestors. Establish its own approved baseline before standing authorization and repeat tag, real-IIS recovery and application acceptance there.
