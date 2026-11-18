@@ -52,7 +52,7 @@ Complete [workspace live acceptance](../behavior/report-workspace.md#workspace-l
 
 ## External configuration provisioning
 
-Application ID `ssrs-web` determines `C:\ProgramData\clc-ssrs-web\Config\application.json` on the separate DEV and Production servers. The native Windows known-folder API resolves the parent. Windows startup checks that the package's CommonApplicationData path agrees with the native ProgramData and system-drive checks. Compiled tag metadata independently binds a release to `ssrs-web-dev` or `ssrs-web-production`; `--environment` cannot change either identity. Beta/RC artifacts have no runnable namespace. Local Synthetic development also uses `clc-ssrs-web`.
+The configuration file is `clc-ssrs-web\Config\application.json` under each server's native Windows ProgramData known folder. For the conventional `C:\ProgramData` location, the full path is `C:\ProgramData\clc-ssrs-web\Config\application.json`. Windows startup checks that the package's CommonApplicationData path agrees with the native ProgramData and system-drive checks. Compiled tag metadata independently binds a release to `ssrs-web-dev` or `ssrs-web-production`; `--environment` cannot change either identity. Beta/RC artifacts have no runnable namespace. Local Synthetic development also uses `clc-ssrs-web`.
 
 Keep `Config`, `Keys`, `Logs`, `Application`, `Inbox` and protected `Deployment` as physically disjoint siblings. Infrastructure owns the protected deployment namespace and approvals. The application owns its operational configuration requirements. If a former target-derived directory exists, independently inspect its configuration, key ring, logs, enrollment and recovery evidence and arrange a separately approved cutover. Preserve the existing directories and evidence pending that approval.
 
@@ -233,7 +233,7 @@ Use upstream [deployment configuration](https://github.com/clcdpc/clc-deployment
 
 | Source | SSRS-specific values / how to obtain them |
 | --- | --- |
-| Application constants | In [deployment.example.json](../../deployment/deployment.example.json), retain contract family/version/kind, `applicationId=ssrs-web`, `targetId=ssrs-web-dev`, `environmentName=DEV`, `runtimeEnvironment=Production`. Derive `Application`, `Config\application.json`, `Keys`, `Inbox` and `Deployment` from native ProgramData's `clc-ssrs-web` directory for the five path fields. Write `Config\deployment.json` as protected UTF-8 JSON |
+| Application constants | In `deployment.example.json`, retain contract family/version/kind, `applicationId=ssrs-web`, `targetId=ssrs-web-dev`, `environmentName=DEV`, `runtimeEnvironment=Production`. Replace the example's five absolute paths with paths to `Application`, `Config\application.json`, `Keys`, `Inbox` and `Deployment` under the server's native ProgramData `clc-ssrs-web` directory. Write `Config\deployment.json` as protected UTF-8 JSON. [Deployment configuration example](../../deployment/deployment.example.json) |
 | devweb observations | Actual dedicated `siteName`, `applicationPoolName`, approved `runtimeAccountName`, resolved `runtimeIdentitySid`, final HTTPS DNS hostname/port for `readinessUri` ending `/health/ready`. Inspect IIS Manager's pool Advanced Settings / Identity and site Bindings; do not expose passwords. Resolve the approved account with `([Security.Principal.NTAccount]::new($runtimeAccountName)).Translate([Security.Principal.SecurityIdentifier]).Value` |
 | Authenticated toolkit | Independently approved version/source/archive digest and verified module inventory for `activeToolkit`; bootstrap source and executable inventory covering both module and tools for the enrollment record. Follow [initial bootstrap provisioning](https://github.com/clcdpc/clc-deployment/blob/master/docs/installation.md#initial-bootstrap-provisioning) |
 | Host-policy observations | devweb SMBIOS UUID (`Get-CimInstance Win32_ComputerSystemProduct` / UUID), actual installed x64 dotnet/appcmd paths, canonical target-local policy/catalog/control/lock/version paths; observe actual infrastructure/deployment SIDs under the approved identities |
@@ -281,6 +281,8 @@ Schema 1 omits `sourcePolicy`. Validate final bytes against the schema and use t
 
 The dedicated deployment job authenticates the exact scripts from the tagged commit and rechecks source, producer and artifact after queueing. It verifies Ready enrollment, the protected target and independently installed runtime before deployment. Protected host configuration and authorization stay under infrastructure control. Application packages contain neither credentials nor host setup tooling and carry no deployment approval. SQL and administrative setup ship separately for [subscription provisioning](subscriptions.md#production-provisioning-and-deployment).
 
+DEV and Production runner services must resolve the approved, globally installed `pwsh` through their effective PATH. Use stable PowerShell 7.6.6 or newer within 7.x. Administrators can apply supported 7.x updates without changing SSRS Web. The deployment entry point rejects prereleases and PowerShell 8.x or later. GitHub-hosted release packaging uses an exact PowerShell pin for reproducibility. Follow the executable and PATH protection and read-only verification steps in [host preparation](../clc-deployment.md#phase-2--prepare-devweb).
+
 Only hosted archive has contents-write permission. Publication verifies exact source, producer, compiled, package and builder identities, creates or verifies a draft, publishes and requires Boolean `immutable=true` on the final canonical application Release. Publication refuses conflicting or mutable published assets. The [toolkit lock](../../deployment/toolkit.lock.json) pins published Clc.Deployment PowerShell `0.1.0-beta.5` format 3. Its upstream Release reports `immutable=false`; independently authenticate the exact archive digest. The ASP.NET Core companion stays pinned to beta.3. Infrastructure separately approves the host's active pin, which may differ if it supports the application-based layout and compatible schema-1 APIs. See [licensing and binary obligations](../licensing-and-distribution.md).
 
 For a fresh same-tag build, rerun **all jobs of the original push run** with `gh run rerun <run-id> --repo clcdpc/ssrs-web`. The attempt/package identity changes; canonical assets remain unchanged. Rerunning only archive/deploy cannot qualify another attempt's producer. Actions retention is 30 days; when unavailable, select a new deliberate unused version tag. GitHub is not FIFO: newer eligible tags supersede older ones even if their builds failed/pended. Current exact identity still needs fresh readiness for NoOp. Target concurrency groups do not cancel in-progress work.
@@ -289,15 +291,17 @@ The SSRS [adapter](../../scripts/release/AutomaticDeployment.Adapter.ps1) emits 
 
 ## Deployment contracts and verification
 
-[Application validation](../../src/SsrsPortal/Configuration/DeploymentContract.cs) uses the normal bounded configuration reader without starting logging, host/listeners, remote clients, Hangfire or key generation. The fixed invocation is:
+[Application validation](../../src/SsrsPortal/Configuration/DeploymentContract.cs) uses the normal bounded configuration reader without starting logging, host/listeners, remote clients, Hangfire or key generation. Resolve the canonical application data directory from the release before invoking the validator.
 
 ```powershell
+$appDataDirectory = & dotnet SsrsPortal.dll --clc-appdata-directory
+if ($LASTEXITCODE -ne 0) { throw 'Compiled target discovery failed.' }
 dotnet SsrsPortal.dll --validate-deployment `
-    --configuration-path 'C:\ProgramData\clc-ssrs-web\Config\application.json' `
-    --data-protection-root 'C:\ProgramData\clc-ssrs-web\Keys' --environment Production
+    --configuration-path (Join-Path $appDataDirectory 'Config\application.json') `
+    --data-protection-root (Join-Path $appDataDirectory 'Keys') --environment Production
 ```
 
-Use the actual native ProgramData path if different. Production/Staging only; success is exit 0 and one version-1 JSON object under 8 KiB. It runs as deployer; worker startup must separately prove user-DPAPI/profile access. Configuration revision changes require a restart even with identical release bytes; unchanged-revision drift is refused.
+The validator runs as the deployer in Production or Staging. Success returns exit 0 and one version-1 JSON object under 8 KiB. Worker startup must separately prove user-DPAPI/profile access. Configuration revision changes require a restart even with identical release bytes. Unchanged-revision drift is refused.
 
 Anonymous HTTPS GET `/health/ready` returns no-store JSON with exactly readinessContractVersion=1, status=ready, applicationId, releaseId, sourceCommit, runtimeEnvironment and configurationRevision. Match every field to the approved release/configuration; generic 200, redirects/authentication, wrong/stale identity or TLS bypass do not qualify. Unavailable/stopping/synthetic Development returns 503. Readiness proves local startup, persistent-key smoke and ApplicationStarted, not remote Entra/SSRS/SQL behavior.
 
@@ -307,7 +311,7 @@ Verify installed Application bytes against the exact retained manifest inventory
 
 Use [README verification](../../README.md#verification), particularly `Test-DevDeployment.ps1`, `Test-TagDeployment.ps1`, `Test-ReleaseArchive.ps1`, `Test-ReleasePackaging.ps1`, and `Test-DeploymentReadiness.ps1 -ActionlintPath <approved-actionlint-1.7.12-executable>`. [Windows CI](../../.github/workflows/verify.yml) provides the Release and ordinary publish arguments. Packaging can additionally use `-PublishDirectory <actual-CLC-publish> -OrdinaryPublishDirectory <ordinary-publish> -PublishedToolkit`. It authenticates the pinned beta.5 archive before evaluating its verifier, then checks format-3/inventory/import/compiled/producer bindings. Historical beta.3 archive rejection uses its historical pin. Ordinary tests stay offline without `-PublishedToolkit`.
 
-The independently pinned integration fixture uses a disposable Windows runner. Set `$cleanExactToolkitCheckout` to a clean checkout of the indicated raw-byte toolkit source.
+The independently pinned integration fixture uses a disposable GitHub-hosted Windows runner and CI's authenticated PowerShell 7.6.6 executable. Set `$cleanExactToolkitCheckout` to a clean checkout of the indicated raw-byte toolkit source.
 
 ```powershell
 pwsh -NoProfile -File ./scripts/release/Test-DeploymentIntegration.ps1 `

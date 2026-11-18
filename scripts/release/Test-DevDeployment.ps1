@@ -30,8 +30,11 @@ try {
     Test-Case 'The DEV deployment example keeps target identity separate from the canonical application paths' {
         $config=Read-SsrsJson ([IO.File]::ReadAllBytes((Join-Path $repository 'deployment/deployment.example.json')))
         Assert-True ($config.applicationId -ceq 'ssrs-web' -and $config.targetId -ceq 'ssrs-web-dev' -and $config.environmentName -ceq 'DEV')
+        $applicationRoot=[regex]::Match($config.applicationRoot,'^([A-Za-z]:\\(?:[^\\/:]+\\)*clc-ssrs-web)\\Application$')
+        Assert-True $applicationRoot.Success
+        $root=$applicationRoot.Groups[1].Value
         foreach ($pair in @(@('applicationRoot','Application'),@('operationalConfigPath','Config\application.json'),@('dataProtectionRoot','Keys'),@('artifactInboxRoot','Inbox'),@('enrollmentRoot','Deployment'))) {
-            Assert-True ($config[$pair[0]] -ceq ('C:\ProgramData\clc-ssrs-web\'+$pair[1]))
+            Assert-True ($config[$pair[0]] -ceq ($root+'\'+$pair[1]))
         }
     }
     Test-Case 'Privileged source/event guards reject an ordinary local or contributor context before host access' {
@@ -104,38 +107,42 @@ try {
         Assert-Fails { Assert-SsrsLocalIisConfiguration (Read-SsrsXml ([Text.Encoding]::UTF8.GetBytes('<configuration/>'))) } 'Ssrs.Prerequisite.UnsupportedIisConfigurationLayout'
         Assert-Fails { Assert-SsrsLocalIisConfiguration (Read-SsrsXml ([Text.Encoding]::UTF8.GetBytes('<configuration><configurationRedirection enabled="false" configSource="external.config"/></configuration>'))) } 'Ssrs.Prerequisite.UnsupportedIisConfigurationLayout'
     }
-    Test-Case 'Runner shell templates disable profiles and preserve trusted PowerShell script and native exit behavior' {
-        $deployShell=[regex]::Match($workflow,'(?m)^        shell: (C:\\CLC\\Tools\\PowerShell\\7\.6\.6\\pwsh\.exe .*)$').Groups[1].Value.TrimEnd("`r")
+    Test-Case 'The custom deploy shell resolves pwsh on PATH and preserves script arguments and exit behavior' {
+        $deployShell=[regex]::Match($workflow,'(?m)^        id: deployment\r?\n        shell: ([^\r\n]+)\r?$').Groups[1].Value
         Assert-True ($workflow.Contains('needs: release') -and $workflow.Contains('needs: archive'))
         $parts=$deployShell.Split(' ',2)
-        Assert-True ($parts.Count -eq 2 -and $parts[0] -ceq 'C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe' -and $parts[0].IndexOf(' ') -lt 0)
-        Assert-True ($parts[1].Contains('-NoLogo -NoProfile -NonInteractive -CommandWithArgs') -and $parts[1].Contains('[System.IO.File]::ReadAllText($args[0])') -and $parts[1].Contains('"{0}"'))
-        Assert-True ($workflow.Contains('if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }'))
-        # The pinned custom executable is not one of Runner's built-in shell
-        # names, so Runner writes an extensionless temp file and adds no fixup.
-        # Execute that parsed template against an owned inert file; its path is
-        # an argument, so spaces and apostrophes cannot become PowerShell code.
-        if ($IsWindows) {
-            $pwsh=(Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
-            $probeRoot=Join-Path $repository ('artifacts/shell-template-probe/shell probe''s-'+[Guid]::NewGuid().ToString('N'))
-            [void][IO.Directory]::CreateDirectory($probeRoot)
-            $probePath=Join-Path $probeRoot 'runner-generated-file'
-            $probe=@'
-$ErrorActionPreference='Stop'
-& $env:ComSpec /d /c exit 37
-if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
-'@
-            [IO.File]::WriteAllText($probePath,$probe,[Text.UTF8Encoding]::new($false))
-            $resolvedScriptPath=$probePath.Replace('"','\\"')
-            $arguments=[string]::Format([Globalization.CultureInfo]::InvariantCulture,$parts[1],$resolvedScriptPath)
-            $start=[Diagnostics.ProcessStartInfo]::new($pwsh); $start.Arguments=$arguments; $start.UseShellExecute=$false
-            $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true; $start.CreateNoWindow=$true
+        Assert-True ($parts.Count -eq 2 -and $parts[0] -ceq 'pwsh')
+        Assert-True ($parts[1] -ceq '-NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"')
+        $nativeExit='if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }'
+        Assert-True ($workflow.Contains($nativeExit))
+
+        # Runner resolves the first token on PATH and treats pwsh as a
+        # PowerShell script type even when the argument format is custom.
+        $pwsh=(Get-Command -Name $parts[0] -CommandType Application | Select-Object -First 1).Source
+        $probeRoot=Join-Path $repository ('artifacts/shell-template-probe/'+[Guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($probeRoot)
+        $probePath=Join-Path $probeRoot "runner's generated file.ps1"
+        $arguments=[string]::Format([Globalization.CultureInfo]::InvariantCulture,$parts[1],$probePath.Replace('"','\"'))
+        $start=[Diagnostics.ProcessStartInfo]::new($pwsh); $start.Arguments=$arguments; $start.UseShellExecute=$false
+        $start.RedirectStandardInput=$true; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true; $start.CreateNoWindow=$true
+        $probes=@(
+            @{body="'script path accepted'";code=0;output='script path accepted';error=''}
+            @{body='exit 23';code=23;output='';error=''}
+            @{body=('& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -Command "exit 37"'+[Environment]::NewLine+$nativeExit);code=37;output='';error=''}
+            @{body="Read-Host 'Unexpected prompt'";code=1;output='';error='NonInteractive'}
+        )
+        foreach ($probe in $probes) {
+            $content=@('$ErrorActionPreference = ''stop''',$probe.body,'if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit $LASTEXITCODE }') -join [Environment]::NewLine
+            [IO.File]::WriteAllText($probePath,$content,[Text.UTF8Encoding]::new($false))
             $process=[Diagnostics.Process]::new(); $process.StartInfo=$start
             try {
                 Assert-True $process.Start()
+                $process.StandardInput.Close()
                 Assert-True ($process.WaitForExit(15000))
-                $stdout=$process.StandardOutput.ReadToEnd(); $stderr=$process.StandardError.ReadToEnd()
-                Assert-True ($process.ExitCode -eq 37 -and [string]::IsNullOrEmpty($stderr) -and $stdout -notmatch 'shell probe')
+                $stdout=$process.StandardOutput.ReadToEnd().Trim(); $stderr=$process.StandardError.ReadToEnd().Trim()
+                Assert-True ($process.ExitCode -eq $probe.code -and $stdout -ceq $probe.output)
+                if ($probe.error) { Assert-True ($stderr.Contains($probe.error)) }
+                else { Assert-True ($stderr.Length -eq 0) }
             } finally {
                 if (-not $process.HasExited) { $process.Kill(); $null=$process.WaitForExit(5000) }
                 $process.Dispose()
@@ -238,13 +245,59 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
         Assert-True (-not ($functions -match 'Restore-ClcIisDeployment|Stop-WebAppPool|Start-WebAppPool|Remove-Item|sqlcmd'))
     }
     if ($IsWindows) {
+        Test-Case 'Only supported stable PowerShell 7.x reaches workflow authentication' {
+            . "$PSScriptRoot/Invoke-TagDeployment.ps1"
+            $boundary=@{authentication=$false;deployment=$false}
+            function Get-SsrsTagWorkflowContext {
+                $boundary.authentication=$true
+                throw 'Synthetic workflow boundary'
+            }
+            function Invoke-SsrsAutomaticDeployment($Release,$Evidence) {
+                $boundary.deployment=$true
+                throw 'Unexpected deployment boundary'
+            }
+            $versions=[ordered]@{
+                '7.5.4'=$false
+                '7.6.5'=$false
+                '7.6.6'=$true
+                '7.6.7'=$true
+                '7.6.9'=$true
+                '7.7.0'=$true
+                '7.8.0'=$true
+                '7.6.6-preview.1'=$false
+                '7.7.0-rc.1'=$false
+                '8.0.0'=$false
+                '8.1.0'=$false
+            }
+            $originalVersion=$PSVersionTable.PSVersion
+            $originalJob=$env:GITHUB_JOB
+            $originalOutput=$env:GITHUB_OUTPUT
+            try {
+                $env:GITHUB_JOB='deploy'
+                $env:GITHUB_OUTPUT=$null
+                foreach ($case in $versions.GetEnumerator()) {
+                    $PSVersionTable.PSVersion=[semver]$case.Key
+                    $boundary.authentication=$false
+                    Assert-Fails { Invoke-SsrsTagDeploymentEntry } 'FailedSeeRetainedEvidence'
+                    if ($boundary.authentication -ne $case.Value -or $boundary.deployment) {
+                        throw "Unexpected deployment entry behavior for PowerShell $($case.Key)."
+                    }
+                }
+            } finally {
+                $PSVersionTable.PSVersion=$originalVersion
+                $env:GITHUB_JOB=$originalJob
+                $env:GITHUB_OUTPUT=$originalOutput
+            }
+        }
         Test-Case 'Native bootstrap selection rejects forged ProgramData and SystemDrive before reading authority' {
             Initialize-SsrsNative
             $root=Get-SsrsProgramData; $savedData=$env:ProgramData; $savedDrive=$env:SystemDrive
+            $systemDrive=[IO.Path]::GetPathRoot([Environment]::SystemDirectory).TrimEnd('\')
+            $forgedDrive=if ($systemDrive -ieq 'Z:') { 'Y:' } else { 'Z:' }
             try {
-                $env:ProgramData='Z:\forged-program-data'
+                $env:ProgramData=$root+'-forged'
                 Assert-Fails { Assert-SsrsProgramDataEnvironment $root } 'Ssrs.Prerequisite.ProgramDataEnvironment'
-                $env:ProgramData=$savedData; $env:SystemDrive='Z:'
+                $env:ProgramData=$savedData; $env:SystemDrive=$forgedDrive
                 Assert-Fails { Get-SsrsProgramData }
             } finally { $env:ProgramData=$savedData; $env:SystemDrive=$savedDrive }
         }

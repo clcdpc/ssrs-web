@@ -12,7 +12,7 @@ See [repeatable Windows packaging checks](README.md#repeatable-local-checks) for
 
 `Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. ssrs-web owns the SafeLogLayout output sanitizer and registers one configured NLog path. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
-DEV and Production write to `C:\ProgramData\clc-ssrs-web\Logs` on their separate servers. The application ID fixes the directory name under native Windows ProgramData. Config and Logs are siblings outside website/release directories and survive deployment and recycling. Logging can create Logs if permitted. Administrators should provision it first so the service needs no write access to the ProgramData application root.
+DEV and Production write to `clc-ssrs-web\Logs` under their respective native Windows ProgramData known folders. Config and Logs are siblings outside website/release directories and survive deployment and recycling. Logging can create Logs if permitted. Administrators should provision it first so the service needs no write access to the ProgramData application root.
 
 Files use local dates: `ssrs-web-2026-11-01.log`. Extra files use numbered suffixes, such as `ssrs-web-2026-11-01.001.log`. Entries start with a millisecond timestamp, UTC offset, severity and category. Message, template, JSON properties/scopes and any exception details follow; `---` separates entries. Events use this single text format without routine duplicate files. UTC offsets distinguish repeated daylight-saving hours.
 
@@ -43,6 +43,8 @@ Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOver
 
 For initial setup follow [the devweb commissioning procedure](../clc-deployment.md); the [optional GitHub diagnostic](../../.github/workflows/diagnose-deployment.yml) is read-only, never accesses hosts and does not gate deployment. For exact release/rerun behavior see the [release reference](README.md#release-and-toolkit-reference).
 
+If the deployment shell cannot start or reports `Ssrs.TrustedWorkflowRequired`, check `pwsh` resolution under the runner service's actual identity and effective PATH. The approved global executable must report stable PowerShell 7.6.6 or newer within 7.x. The same entry guard also requires Windows and the `deploy` workflow job. Verify the executable and search-path protections using the [read-only host checks](../clc-deployment.md#phase-2--prepare-devweb).
+
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
 The [CLC deployment runbook](../clc-deployment.md) preserves Config and Logs outside the managed release, with Config read-only and Logs write/modify access for runtime. The single worker drains without overlapping recycle. Deployment neither packages configuration/logs nor changes their ACLs.
@@ -53,7 +55,7 @@ The consumer preflight checks that the physical Logs path is disjoint from the a
 
 Use upstream [failure behavior](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#failure-behavior) and [operator recovery](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#operator-procedure) with the exact independently authenticated active runtime for `ssrs-web-dev`. Freeze competing IIS/configuration/filesystem/deployment changes. Preserve Application, protected current/journal/attempts, approvals, original packages, verified manifests/staging/backups/indexes, configuration, keys and actual pool/worker observations. Prove exact helper processes exited. Unknown lifetime, partial installation or corrupt/unverifiable state requires independent maintenance, not a normal retry.
 
-Recover only the **latest failed attempt**, using the independently approved compatible configuration and selected release/backup. In a fresh approved PowerShell process:
+Recover only the **latest failed attempt**, using the independently approved compatible configuration and selected release/backup. Use a fresh process from the approved PowerShell 7.x executable verified during host preparation.
 
 ```powershell
 Import-Module $independentlyVerifiedActiveManifest
@@ -78,7 +80,7 @@ Complete these checks under an authorized DEV host procedure; synthetic file tes
 
 ## Detailed SSRS diagnostics
 
-Edit `C:\ProgramData\clc-ssrs-web\Config\application.json` on the selected server, using its native ProgramData parent. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration.
+Edit `Config\application.json` under the selected server's native ProgramData `clc-ssrs-web` directory. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration.
 
 ```json
 "Diagnostics": {

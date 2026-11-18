@@ -369,7 +369,7 @@ jobs:
     steps:
       - name: Load exact tagged deployment code and reauthenticate release
         id: deployment
-        shell: C:\CLC\Tools\PowerShell\7.6.6\pwsh.exe -NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -CommandWithArgs "& ([System.Management.Automation.ScriptBlock]::Create([System.IO.File]::ReadAllText($args[0])))" "{0}"
         env:
           SSRS_EXPECTED_TARGET: ${{ needs.archive.outputs.target }}
           SSRS_ARTIFACT_READ_TOKEN: ${{ github.token }}
