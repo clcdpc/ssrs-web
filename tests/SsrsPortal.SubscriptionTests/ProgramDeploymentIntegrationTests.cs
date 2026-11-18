@@ -250,14 +250,15 @@ public sealed class ProgramDeploymentIntegrationTests
             var legacyConfig = await RunValidator(publish, Path.Combine(legacyRoot, "Config", "application.json"), keyDirectory);
             CollectionAssert.Contains(legacyConfig.ErrorCodes, "ConfigurationPathMismatch");
             var legacyKeyDirectory = Path.Combine(legacyRoot, "Keys");
-            File.WriteAllText(configPath, AcceptanceConfiguration(legacyKeyDirectory).ToJsonString());
+            Directory.CreateDirectory(legacyKeyDirectory);
             try
             {
+                File.WriteAllText(configPath, AcceptanceConfiguration(legacyKeyDirectory).ToJsonString());
                 var legacyKeys = await RunValidator(publish, configPath, legacyKeyDirectory);
                 CollectionAssert.Contains(legacyKeys.ErrorCodes, "ConfigurationOrKeyStoreInvalid");
             }
             finally { File.WriteAllBytes(configPath, configurationBytes); }
-            Assert.IsFalse(Directory.Exists(legacyRoot));
+            Assert.AreEqual(0, Directory.GetFileSystemEntries(legacyKeyDirectory).Length);
             AssertInventory(emptyKeys, keyDirectory);
             Assert.IsFalse(Directory.Exists(logDirectory), "Validate-only must not initialize file logging.");
 
