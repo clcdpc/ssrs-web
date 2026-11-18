@@ -4,15 +4,15 @@
 
 ## Build-time deployment toolkit
 
-The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.4` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded bytes disagree with the independent archive pin; `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with its lock. Source/version disagreement is rejected by the authenticated distribution verifier. Do not bypass these checks or substitute a legacy module name. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` now indicates an old-format or missing descriptor, including the historical beta.3 PowerShell archive; beta.4 publication is no longer outstanding.
+The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.5` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded archive digest disagrees with the lock. `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with the lock. The authenticated verifier also rejects source/version disagreement. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` indicates an old format or missing descriptor, including the historical beta.3 PowerShell archive.
 
-Repeat Windows packaging with actual CLC Release publish output and `scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory <publish> -PublishedToolkit`. The upstream beta.4 GitHub Release reports `immutable=false`, but its exact asset digest is pinned. Successful acquisition/packaging does not establish host runtime installation or activation, enrollment, approved baseline, standing authorization or live DEV/Production acceptance. Those target-local operations require separate authority; the beta.3 ASP.NET Core companion is a separate dependency.
+See [repeatable Windows packaging checks](README.md#repeatable-local-checks) for the published toolkit and actual CLC Release output. The upstream beta.5 Release reports `immutable=false`; the independent exact archive digest remains the acquisition trust boundary. For initial host installation and activation, follow [authorized enrollment](../clc-deployment.md#phase-4--prepare-bootstrap-and-enroll-clcdeployment).
 
 ## Persistent file logging
 
 `Clc.Logging` 0.1.0-beta.2 supplies reusable NLog setup and Microsoft `ILogger<T>` integration, with `Clc.Configuration` 0.1.0-beta.5, NLog 6.2.2 and NLog.Extensions.Logging 6.3.0. ssrs-web owns the SafeLogLayout output sanitizer and registers one configured NLog path. No nlog.config is required. There is no appsettings fallback, logging environment override, arbitrary log path or hot reload.
 
-Released DEV logs use `%ProgramData%\clc-ssrs-web-dev\Logs\`, and stable Production logs use `%ProgramData%\clc-ssrs-web-production\Logs\`. Native Windows known-folder verification and compiled tag/target metadata select the root; local Synthetic development retains `clc-ssrs-web`. Config and Logs are siblings outside website/release directories and survive deployment/recycling. Logging may create Logs if allowed, but never changes ACLs or writes to Config. Administrators should provision Logs first, avoiding service write access to the ProgramData application root.
+DEV and Production write to `C:\ProgramData\clc-ssrs-web\Logs` on their separate servers. The application ID fixes the directory name under native Windows ProgramData. Config and Logs are siblings outside website/release directories and survive deployment and recycling. Logging can create Logs if permitted. Administrators should provision it first so the service needs no write access to the ProgramData application root.
 
 Files use local dates: `ssrs-web-2026-11-01.log`. Extra files use numbered suffixes, such as `ssrs-web-2026-11-01.001.log`. Entries start with a millisecond timestamp, UTC offset, severity and category. Message, template, JSON properties/scopes and any exception details follow; `---` separates entries. Events use this single text format without routine duplicate files. UTC offsets distinguish repeated daylight-saving hours.
 
@@ -78,7 +78,7 @@ Complete these checks under an authorized DEV host procedure; synthetic file tes
 
 ## Detailed SSRS diagnostics
 
-Edit only the selected release target's protected `Config\application.json`: `%ProgramData%\clc-ssrs-web-dev` for DEV or `%ProgramData%\clc-ssrs-web-production` for stable Production. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration:
+Edit `C:\ProgramData\clc-ssrs-web\Config\application.json` on the selected server, using its native ProgramData parent. Merge the following into the existing `Portal` object, preserving the real endpoint, roots, policy and Entra configuration.
 
 ```json
 "Diagnostics": {
@@ -87,7 +87,7 @@ Edit only the selected release target's protected `Config\application.json`: `%P
 }
 ```
 
-Restart the app or recycle its IIS pool after every change; there is no hot reload. `DetailedFailuresAtDebug` defaults to true, capturing bounded SSRS failure details in default Debug application logs. `Enabled=true` promotes details to Warning when Debug is disabled. `Enabled` and `ShowDetailsInBrowser` default to false. Search Logs for `Portal failure`, the operation or the browser's Reference. Structured Trace and SOAP references link shared/background work to the originating request. No HTTP body logger is needed.
+Change `Deployment.ConfigurationRevision` with every edit and restart the app or recycle its IIS pool. `DetailedFailuresAtDebug` defaults to true, capturing bounded SSRS failure details in default Debug application logs. `Enabled=true` promotes details to Warning when Debug is disabled. `Enabled` and `ShowDetailsInBrowser` default to false. Search Logs for `Portal failure`, the operation or the browser's Reference. Structured Trace and SOAP references link shared/background work to the originating request.
 
 For local browser details, set `ShowDetailsInBrowser=true`. Select the HTTPS Development launch profile with a registered localhost OIDC callback, then restart Visual Studio's application process. Use `UseMock=false` and `TestAuth=false` for real SSRS/Entra tests.
 

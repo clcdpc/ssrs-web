@@ -27,6 +27,13 @@ function Get-TestApproval {
         provenance=@{workflowPath='.github/workflows/release.yml';runId=42L;runAttempt=2L;buildJob='release';artifactId=88L;transportSha256=('4'*64)}}
 }
 try {
+    Test-Case 'The DEV deployment example keeps target identity separate from the canonical application paths' {
+        $config=Read-SsrsJson ([IO.File]::ReadAllBytes((Join-Path $repository 'deployment/deployment.example.json')))
+        Assert-True ($config.applicationId -ceq 'ssrs-web' -and $config.targetId -ceq 'ssrs-web-dev' -and $config.environmentName -ceq 'DEV')
+        foreach ($pair in @(@('applicationRoot','Application'),@('operationalConfigPath','Config\application.json'),@('dataProtectionRoot','Keys'),@('artifactInboxRoot','Inbox'),@('enrollmentRoot','Deployment'))) {
+            Assert-True ($config[$pair[0]] -ceq ('C:\ProgramData\clc-ssrs-web\'+$pair[1]))
+        }
+    }
     Test-Case 'Privileged source/event guards reject an ordinary local or contributor context before host access' {
         . "$PSScriptRoot/Invoke-TagDeployment.ps1"
         Assert-Fails { Invoke-SsrsTagDeploymentEntry } 'FailedSeeRetainedEvidence'
@@ -257,7 +264,9 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
             # Only ACL/OS identity observations are synthetic; native physical
             # pins, stream hashing, exact names and first-execution ordering run.
             function Assert-SsrsAcl([string] $Path,[bool] $Ancestor) {}
-            $authority=Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment/enrollment/authorizations'; $root=Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment/bootstrap'
+            $applicationRoot=Join-Path $script:fixtureProgramData 'clc-ssrs-web'
+            $deploymentRoot=Join-Path $applicationRoot 'Deployment'
+            $authority=Join-Path $deploymentRoot 'enrollment/authorizations'; $root=Join-Path $deploymentRoot 'bootstrap'
             [void][IO.Directory]::CreateDirectory($authority); [void][IO.Directory]::CreateDirectory((Join-Path $root 'Clc.Deployment/Private')); [void][IO.Directory]::CreateDirectory((Join-Path $root 'tools/host'))
             $sentinel=Join-Path $parent 'executed.txt'
             $payload=@{'Clc.Deployment/Clc.Deployment.psm1'='# inert test module';'Clc.Deployment/Private/Deployment.ps1'='# inert private helper; never loaded';'tools/host/HostEnrollment.Common.ps1'="[IO.File]::WriteAllText('$sentinel','executed')"}
@@ -266,10 +275,20 @@ if (Test-Path -LiteralPath variable:\LASTEXITCODE) { exit $LASTEXITCODE }
                 @{path=$name;length=([IO.FileInfo]$path).Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
             })
             [IO.File]::WriteAllText((Join-Path $root 'source.commit'),('1'*40)); [IO.File]::WriteAllText((Join-Path $root 'distribution.zip'),'inert independently test-pinned distribution')
-            $auth=@{contractFamily='clc-host-enrollment-v1';recordKind='host-enrollment-authorization';schemaVersion=1;authorizationId='fixture-auth';targetId='ssrs-web-dev';enrollmentRoot=(Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev/Deployment');bootstrap=@{sourceCommit=('1'*40);inventorySha256=(Get-SsrsInventoryHash $inventory)};hostPolicy=@{activeToolkit=@{distributionSha256=(Get-FileHash -LiteralPath (Join-Path $root 'distribution.zip') -Algorithm SHA256).Hash.ToLowerInvariant()}}}
+            $auth=@{contractFamily='clc-host-enrollment-v1';recordKind='host-enrollment-authorization';schemaVersion=1;authorizationId='fixture-auth';targetId='ssrs-web-dev';enrollmentRoot=$deploymentRoot;bootstrap=@{sourceCommit=('1'*40);inventorySha256=(Get-SsrsInventoryHash $inventory)};hostPolicy=@{activeToolkit=@{distributionSha256=(Get-FileHash -LiteralPath (Join-Path $root 'distribution.zip') -Algorithm SHA256).Hash.ToLowerInvariant()}}}
             [IO.File]::WriteAllBytes((Join-Path $authority 'fixture-auth.json'),(Json-Bytes $auth))
             $opened=Open-SsrsBootstrap 'fixture-auth'
-            try { Assert-True ($opened.leases.Count -gt 0 -and -not [IO.File]::Exists($sentinel)) } finally { foreach ($lease in $opened.leases) { $lease.Dispose() } }
+            try { Assert-True ($opened.targetRoot -ceq $applicationRoot -and $opened.leases.Count -gt 0 -and -not [IO.File]::Exists($sentinel)) } finally { foreach ($lease in $opened.leases) { $lease.Dispose() } }
+            $legacyRoot=Join-Path $script:fixtureProgramData 'clc-ssrs-web-dev'
+            [IO.Directory]::Move($applicationRoot,$legacyRoot)
+            try {
+                $auth.enrollmentRoot=Join-Path $legacyRoot 'Deployment'
+                [IO.File]::WriteAllBytes((Join-Path $auth.enrollmentRoot 'enrollment/authorizations/fixture-auth.json'),(Json-Bytes $auth))
+                Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.Prerequisite.IndependentHostAuthorizationRequired'
+            } finally { [IO.Directory]::Move($legacyRoot,$applicationRoot) }
+            Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.FixedTargetMismatch'
+            $auth.enrollmentRoot=$deploymentRoot
+            [IO.File]::WriteAllBytes((Join-Path $authority 'fixture-auth.json'),(Json-Bytes $auth))
             Assert-Fails { Open-SsrsBootstrap 'missing-auth' } 'Ssrs.Prerequisite.IndependentHostAuthorizationRequired'
             [IO.File]::AppendAllText((Join-Path $root 'distribution.zip'),'wrong bytes')
             Assert-Fails { Open-SsrsBootstrap 'fixture-auth' } 'Ssrs.ApprovedDistributionMismatch'

@@ -44,24 +44,17 @@ node scripts/check-generated-artifacts.cjs
 git diff --check
 ```
 
-Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. Windows packaging adds `Test-ReleasePackaging.ps1 -PublishedToolkit` with actual CLC Release publish output: it downloads the checked-in beta.4 toolkit pin, verifies and packages that output, and rejects the historical beta.3 archive using its own historical pin. Offline packaging and separately pinned synthetic runtime tests remain independent. Tag releases use dedicated deployment runners and independently provisioned host standing authorization.
+Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The Windows packaging check uses the [build-time toolkit lock](deployment/toolkit.lock.json) with actual CLC Release publish output and verifies rejection of the historical beta.3 PowerShell archive. Offline packaging and separately pinned synthetic runtime tests remain independent.
 
 ## Tagged releases
 
-Create and push a DEV tag at the selected commit:
+The [tag workflow](.github/workflows/release.yml) builds and tests on hosted runners, publishes an immutable canonical GitHub Release, then deploys on the dedicated target runner under independently provisioned host standing authorization. DEV tags may select unmerged workflow, script and application changes without PR admission. Stable tags require protected `master` ancestry and select the separately commissioned Production target. Beta/RC publish artifacts only.
 
-```powershell
-git tag v1.2.3-dev.4
-git push origin v1.2.3-dev.4
-```
-
-The [existing tag workflow](.github/workflows/release.yml) builds/tests, publishes an immutable canonical GitHub Release, then deploys automatically under independently provisioned host standing authorization. DEV may select unmerged workflow/script/application changes without PR admission; stable tags require protected master ancestry and select the separately commissioned Production target. Beta/RC publish artifacts only.
-
-Complete [DEV commissioning](docs/clc-deployment.md) through independently approved enrollment and baseline **before** enabling standing authorization. Routine releases then need only a permitted tag push. See the [release reference](docs/operations/README.md#release-and-toolkit-reference) for tag bounds, toolkit pins, artifacts and same-tag reruns, and [separate live acceptance](docs/clc-deployment.md#separate-dev-acceptance) for outstanding qualification. No GitHub/host settings are provisioned by changing these documents.
+Authorized enrollment Apply installs and activates the initial host toolkit. Verify it and complete the separately approved baseline **before** enabling standing authorization. Routine releases then need only a permitted tag push. See [DEV commissioning](docs/clc-deployment.md), the [release reference](docs/operations/README.md#release-and-toolkit-reference) and [live acceptance](docs/clc-deployment.md#separate-dev-acceptance).
 
 ## Run against DEV SSRS
 
-1. For local Synthetic development on Windows, follow [configuration provisioning](docs/operations/README.md#external-configuration-provisioning). Its root is `clc-ssrs-web`; released DEV uses `clc-ssrs-web-dev` and requires the commissioning procedure. Preserve existing files and protect credentials.
+1. For local Synthetic development on Windows, use the native ProgramData application directory `clc-ssrs-web`. Preserve existing files and protect credentials. See [configuration provisioning](docs/operations/README.md#external-configuration-provisioning).
 2. Set the HTTPS `/ReportServer` URL, roots/exclusions, Entra client ID/secret, and approved tenants. The process's Windows identity needs SSRS access.
 3. Allow `https://localhost:7443/signin-oidc` in Entra and assign staff the exact `ReportViewer` role. See [Entra setup](docs/operations/README.md#multi-tenant-entra-onboarding-and-global-catalog-policy).
 4. Start the portal:
