@@ -33,6 +33,9 @@ jobs:
           ref: 7fcfd03da044655b57fe47d55e234571bef035bd
           path: artifacts/clc-deployment
           persist-credentials: false
+      - name: Use a fresh SDK installation directory
+        shell: pwsh
+        run: '"DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV'
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json

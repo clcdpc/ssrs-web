@@ -2,6 +2,8 @@
 
 Live Windows Server/IIS and SSRS Web commissioning status is **NOT RUN**. Use this procedure on DEV first. Production follows the same process on its own dedicated server.
 
+The first tag deployment is blocked by a defect in the pinned beta.6 shared release code. Resolve it with a reviewed upstream revision before the tagged deployment step. [Release verification](operations/troubleshooting.md#release-verification)
+
 ## 1. Prepare GitHub and the runners
 
 - Protect `master` with required review and checks. Limit version-tag creation to authorized release actors, protect version tags from updates/deletion, and enable immutable GitHub Releases.
