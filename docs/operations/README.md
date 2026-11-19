@@ -1,6 +1,6 @@
 # Windows Server 2022 / IIS operations
 
-This is the application administration and configuration reference. Commission DEV using [the DEVWEB commissioning guide](../clc-deployment.md); use [troubleshooting and recovery](troubleshooting.md) for failures. Only authorized operators may perform host, directory, Entra and live SSRS actions.
+This is the application administration and configuration reference. Use authorized operators for host, directory, Entra and live SSRS actions. [SSRS Web Deployment and Commissioning Guide](../clc-deployment.md) · [Troubleshooting and recovery](troubleshooting.md)
 
 - [Configuration provisioning](#external-configuration-provisioning), [settings](#configuration-reference), [Entra setup](#multi-tenant-entra-onboarding-and-global-catalog-policy) and [persistent keys](#persistent-data-protection-keys).
 - [Logging](troubleshooting.md#persistent-file-logging), [optional SQL catalog monitor](catalog-monitor.md) and [subscriptions](subscriptions.md).
@@ -10,7 +10,7 @@ This is the application administration and configuration reference. Commission D
 
 Use Windows Server 2022 x64, IIS and the .NET 10 Hosting Bundle/ANCM 20. Repair the bundle if IIS was installed afterward. [Microsoft's IIS hosting guide](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0) covers component installation. Keep the generated release `web.config`; disable detailed errors, routine stdout logging and request/body tracing.
 
-Use the stopped scaffold created by [Initialize Deployment Host](../clc-deployment.md#3-preview-and-initialize). Retain x64, Integrated pipeline, No Managed Code, one worker, disabled overlapping recycling and profile loading. Configure the dedicated HTTPS binding with the approved hostname and certificate. Set `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` to `Production` in the pool on both targets. Leave both startup flags disabled until deployment verifies readiness.
+Use the stopped scaffold created by [Initialize Deployment Host](../clc-deployment.md#5-preview-and-initialize-iis). Retain x64, Integrated pipeline, No Managed Code, one worker, disabled overlapping recycling and profile loading. Configure the dedicated HTTPS binding with the approved hostname and certificate. In IIS Manager, use the server-level **Configuration Editor** for `system.applicationHost/applicationPools` and edit the dedicated pool's `environmentVariables` collection. Set `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT` to `Production` on both targets. Resolve conflicting runtime overrides before validation. Leave both startup flags disabled until deployment verifies readiness.
 
 Use the approved AD application account outside local Administrators, including indirect membership. Infrastructure configures its credentials and logon rights. Grant [runtime directory access](#post-initialization-ntfs-permissions) after initialization. The distinct runner service account requires an enabled elevated local Administrators token for protected IIS and file deployment. Keep administrative ownership of protected paths and grant management access through Administrators and SYSTEM.
 
@@ -28,7 +28,7 @@ Infrastructure must set a site-specific parent policy in protected `applicationH
 </location>
 ```
 
-The tagged publish applies a transform that removes the child `shutdownTimeLimit` so it inherits the locked site policy. Confirm this policy before validation and preserve any prior site separately when planning a cutover. Shared-configuration redirection is refused unless enabled is absent or exactly false (case-insensitive); `configSource` and unsupported layouts are refused. Enabled [subscriptions](subscriptions.md#production-provisioning-and-deployment) additionally require Application Initialization, preload, AlwaysRunning, idle timeout zero and at least 90 seconds of pool shutdown grace. The budgets remain ANCM60/Host45/Hangfire30.
+The tagged publish removes the child `shutdownTimeLimit` so the application inherits the locked site policy. Confirm this policy before validation and preserve any prior site separately when planning a cutover. Shared-configuration redirection requires an absent or exactly false `enabled` value (case-insensitive). `configSource` and unsupported layouts are refused. Enabled subscriptions additionally require Application Initialization, preload, AlwaysRunning, idle timeout zero and at least 90 seconds of pool shutdown grace. The budgets remain ANCM60/Host45/Hangfire30. [Deployed-host subscription provisioning](subscriptions.md#deployed-host-subscription-provisioning)
 
 Tune portal/SSRS deadlines and capacity only after synthetic load and approved live performance tests. Portal cancellation stops local requests/state, not remote SSRS server jobs. Pool recycling clears report executions. Local readiness does not establish remote service or live application acceptance.
 
@@ -56,7 +56,7 @@ Use `clc-ssrs-web\Config\application.json` under each server's native Windows Pr
 
 `Clc.Configuration` discovers the location and loads the startup snapshot. Hosting flags such as environment selection and `--urls` remain available. Operational settings come from the external file. The temporary `SsrsPortal:TestConfigurationFile` override is for isolated Synthetic Development fixtures.
 
-After initialization and ACL review, copy the reviewed [application.Example.json](../../src/SsrsPortal/application.Example.json) from the selected source to the existing `Config` directory with create-new semantics. Resolve the native ProgramData path on the host. The file copy fails if configuration already exists.
+After initialization and ACL review, provision the file before the first deployment. Use the reviewed [application.Example.json](../../src/SsrsPortal/application.Example.json) from the selected source revision. Resolve the native ProgramData path on the host and copy the example into the existing `Config` directory. The create-new copy fails if configuration already exists.
 
 ```powershell
 # Set $reviewedExample to the absolute path of application.Example.json.
@@ -67,7 +67,7 @@ $configFile = Join-Path $appDataDirectory 'Config/application.json'
 
 A trusted deployable binary can also print the exact data directory with `dotnet SsrsPortal.dll --clc-appdata-directory` without creating directories or starting the host. In local Synthetic development, normal startup can create a missing starter file and then stop with setup instructions.
 
-Replace every literal `REPLACE_ME` in the created file with approved portal hostnames, the real HTTPS SSRS `/ReportServer` URL, roots/exclusions, Entra ID/secret and approved tenants, revision and key path. Review and restrict its NTFS ACL before starting the runtime identity; normal runtime needs read access, not write access to `Config`. Enable the optional SQL monitor only after live acceptance. The [example](../../src/SsrsPortal/application.Example.json) is a template, not an operational file. Existing `application.json` is never overwritten or merged; startup rejects remaining placeholders and retains the SSRS-specific validation. `Portal`, `Entra` and `AllowedHosts` are required. Deployment validation and `--clc-appdata-directory` remain read-only; if validation must run before normal startup, the setup administrator must provision the file from the published example separately.
+Replace every literal `REPLACE_ME` with the approved portal hostname, HTTPS SSRS `/ReportServer` endpoint, roots/exclusions, Entra ID/secret and approved tenants, revision and key path. Restrict the file's NTFS ACL before storing credentials and verify runtime read access after saving. Keep existing configuration and review it in place. Startup requires `Portal`, `Entra` and `AllowedHosts` and rejects remaining placeholders. Deployment validation and `--clc-appdata-directory` are read-only. The optional SQL monitor has its own [prerequisites and live checks](catalog-monitor.md).
 
 ### Post-initialization NTFS permissions
 
@@ -197,7 +197,7 @@ The deployment engine obtains an exclusive lock, validates the application and e
 
 Keep the safe Actions summary and the corresponding local attempt evidence. The native ProgramData `clc-ssrs-web\Deployment` directory holds local host, state and attempt records. A pending attempt requires investigation and may require [explicit recovery](troubleshooting.md#deployment-failure-and-explicit-recovery). Protect Config, Keys, Logs and any SQL state with their normal backup procedures.
 
-See [the upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/contracts.md) and [repository verification](../../README.md#verification). Live host and app acceptance remains [open](../clc-deployment.md#7-record-live-dev-acceptance).
+See the [upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/contracts.md) and [repository verification](../../README.md#verification). Record live results using the [commissioning acceptance checks](../clc-deployment.md#9-verify-live-application-acceptance).
 
 ## Catalog cache operations
 
@@ -242,7 +242,7 @@ For an empty library, check canonical roots/exclusions, native Hidden metadata a
 | Gate | Required live evidence |
 | --- | --- |
 | Entra tenants + ReportViewer | Staff in two approved tenants; unknown tenant, missing role and group-only denied; role-authorized overage accepted; missing-role overage denied; consent/assignment/cookie/CSRF/callback/recycle tested |
-| AD service account + SSRS/SQL | Actual worker identity accesses dev SSRS without admin membership; read-only SQL/TLS verified; User!UserID observes the shared identity; prompted/broken reports are visible and fail gracefully |
+| AD service account + SSRS | Actual nonadministrator worker identity accesses SSRS. User!UserID observes the shared identity. Prompted/broken reports are visible and fail gracefully |
 | Page 2 | Approved multi-page report, same SSRS execution, previous/next/last and unknown/known count behavior |
 | RenderStream | Actual chart/image/CSS and subreport streams; browser network contains only portal-origin resource routes; unknown renderer URL variants fail closed |
 | Interactions | Verify recognized single-level/nested expand/collapse with the actual DEV renderer, owner isolation, stale-action rejection, synchronization without replay and private failure diagnostics; sort/drillthrough/maps stay inert |
@@ -251,6 +251,6 @@ For an empty library, check canonical roots/exclusions, native Hidden metadata a
 | Catalog and SSRS execution | Approximately 4,000 real items browse with root/ancestor metadata calls only; sample custom code, datasets, external images, non-SQL sources and subreports execute according to SSRS; aliases retain native defaults; removed reports fail at SSRS or after metadata refresh |
 | Global blocklist | Same catalog for both tenants; direct report/folder blocks hide descendants/search and deny old IDs/parameter requests/runs; unblocked parents/aliases can use blocked dependencies; aliases blocked separately; hidden roots/ancestors excluded; recycle clears sessions |
 
-Complete the focused [logging/IIS](troubleshooting.md#live-iis-acceptance), [SQL monitor](catalog-monitor.md) and [subscription](subscriptions.md#rollback-and-dev-acceptance) checks too. Known-record date boundaries remain [open](../date-parameter-boundary-acceptance.md).
+Complete the focused [logging and IIS checks](troubleshooting.md#live-iis-acceptance). For enabled optional services, verify worker-account SQL access and TLS, then complete the [SQL monitor](catalog-monitor.md) and [subscription](subscriptions.md#rollback-and-dev-acceptance) checks as applicable. Known-record date boundaries remain [open](../date-parameter-boundary-acceptance.md).
 
 [SSRS HTML device information](https://learn.microsoft.com/en-us/sql/reporting-services/html-device-information-settings?view=sql-server-ver17) defines HTMLFragment and Section; [protocol fixtures](../../tests/SsrsPortal.Tests/Fixtures/README.md) define wire expectations. Mock tests and nonempty-byte checks do not establish live fidelity or infrastructure acceptance.

@@ -6,7 +6,7 @@
 - Follow the existing .NET, PowerShell, native JavaScript, testing and security conventions. Use braces for C# and PowerShell conditional blocks.
 - Use the SDK in `global.json`, locked npm dependencies and the verification commands in [README.md](README.md).
 - Use GitHub-hosted `ubuntu-latest` for Linux application/browser CI, installing Chromium and its native dependencies through the locked Playwright package. Preserve trusted-contributor admission checks and the GitHub-hosted Windows compatibility job. Use dedicated repository-scoped runners for host operations in the protected-master initialization and pinned shared deployment workflows.
-- Preserve the [tag-authoritative deployment architecture](docs/clc-deployment.md). Hosted qualification and immutable publication precede pinned shared deployment on a dedicated Windows runner. Authorized DEV tags may select unmerged changes and run in the Production ASP.NET Core environment. Stable tags require protected master ancestry. Beta and RC publish artifacts only.
+- Preserve tag-authoritative deployment. Hosted qualification and immutable publication precede pinned shared deployment on a dedicated Windows runner. Authorized DEV tags may select unmerged changes and run in the Production ASP.NET Core environment. Stable tags require protected master ancestry. Beta and RC publish artifacts only. [SSRS Web Deployment and Commissioning Guide](docs/clc-deployment.md)
 - Keep initialization on protected master with stopped IIS resources, administrator configuration and read-only host validation. Routine tag deployment is unattended. Use explicit toolkit recovery for unresolved attempts.
 - Keep operational configuration and credentials out of source control.
 
