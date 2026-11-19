@@ -4,7 +4,8 @@ Live Windows Server/IIS and SSRS Web commissioning status is **NOT RUN**. Use th
 
 ## 1. Prepare GitHub and the runners
 
-- Protect `master` with required review and checks. Limit version-tag creation to authorized release actors, protect version tags from updates/deletion, and enable immutable GitHub Releases.
+- Require pull requests for all changes to `master` and require the `mock` and `windows-deployment-compatibility` status checks to pass. Set the required number of approving reviews to zero. Block direct updates, force pushes and branch deletion.
+- Limit version-tag creation to authorized release actors, protect version tags from updates/deletion, and enable immutable GitHub Releases.
 - Configure the following dedicated Windows x64 servers, labels and GitHub environments. Set the nonsecret `CLC_RUNTIME_ACCOUNT` environment variable to the expected IIS pool account on each target.
 
   | Target | GitHub environment and additional runner label | Permitted release tags |
