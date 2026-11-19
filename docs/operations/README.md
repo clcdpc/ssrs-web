@@ -188,13 +188,17 @@ Test tenant removal plus recycle. Test role deassignment after sign-out/new sign
 
 GitHub authorizes release tags through protected branch/tag and runner policies. The [tag workflow](../../.github/workflows/release.yml) builds at the exact tag on a hosted runner and uploads a qualified package. The pinned shared publisher verifies its producer and package and publishes an immutable GitHub Release. The pinned shared deploy workflow verifies the published digest and routes DEV and stable releases to their respective Windows targets. Beta and RC publish only. DEV uses the Production ASP.NET Core runtime.
 
-The [consumer configuration](../../.clc/release.json) uses contract 3 with toolkit package contract 3. Shared workflows, initialization and compatibility checks use the same reviewed source pin. Its toolkit release uses distribution format 4, and the ASP.NET Core companion uses validation/readiness protocol 1. The prequalified builder accepts only the standard `packages.lock.json` path for optional manifest lock provenance. That field is null here because SSRS Web qualifies a separate Release-mode lock in addition to its ordinary .NET and npm locks. Those files are available at the recorded exact source commit.
+The consumer uses contract 3 and produces contract-3 packages. Shared workflows, initialization and compatibility checks use commit `e306d730d77c1a05868f124ab2719e71ae186499` from Clc.Deployment `v0.1.0-beta.8`. The toolkit uses distribution format 4. The locked `Clc.Deployment.AspNetCore` `0.1.0-beta.8` companion uses validation and readiness protocol 1. [Consumer configuration](../../.clc/release.json) · [Immutable toolkit release](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
+
+The downloadable toolkit is stamped with the release version. SSRS package manifests record the builder's exact source commit and the module version committed at that revision.
+
+SSRS Web qualifies the application with its ordinary .NET and npm locks and publishes it with a separate Windows Release lock. The prequalified builder records a null dependency lock hash because it looks for `packages.lock.json` at the source root when the consumer configuration supplies no project. All locks are available at the exact source commit recorded in the manifest.
 
 The deployment engine obtains an exclusive lock, validates the application and exact package identity, records intent, and verifies a backup before replacing managed Application files. On success it verifies readiness and the final inventory before recording current state. A lower tag or different bytes under a recorded tag are rejected. An exact package retry can run the full lifecycle if no attempt is pending. Recovery retains the release ordering high-water mark.
 
 Keep the safe Actions summary and the corresponding local attempt evidence. The native ProgramData `clc-ssrs-web\Deployment` directory holds local host, state and attempt records. A pending attempt requires investigation and may require [explicit recovery](troubleshooting.md#deployment-failure-and-explicit-recovery). Protect Config, Keys, Logs and any SQL state with their normal backup procedures.
 
-See [the upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/7fcfd03da044655b57fe47d55e234571bef035bd/docs/contracts.md) and [repository verification](../../README.md#verification). Live host and app acceptance remains [open](../clc-deployment.md#7-record-live-dev-acceptance).
+See [the upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/contracts.md) and [repository verification](../../README.md#verification). Live host and app acceptance remains [open](../clc-deployment.md#7-record-live-dev-acceptance).
 
 ## Catalog cache operations
 

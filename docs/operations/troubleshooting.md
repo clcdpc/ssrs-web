@@ -6,9 +6,7 @@
 
 A failure before the Windows deployment job usually concerns the tagged source, producer job, package contract, shared source pin, release immutability or published digest. Check the hosted job summaries and the [release and toolkit reference](README.md#release-and-toolkit-reference). Keep published assets immutable. If a built release needs new bytes, qualify a new permitted tag.
 
-The beta.6 pin fails on a successful GitHub REST response. PowerShell treats the `$bytes` response variable and the typed `$Bytes` switch as the same variable, so source verification throws before packaging. The shared publisher and router use the same helper. A corrected reviewed upstream revision is required before qualifying a live tag. [Pinned REST helper](https://github.com/clcdpc/clc-deployment/blob/7fcfd03da044655b57fe47d55e234571bef035bd/tools/release/Release.Common.ps1#L126-L145)
-
-The pinned shared publication and routing workflows verify packages under the hosted runner's temporary directory, which must be on NTFS for beta.6. GitHub announced a switch to ReFS for the hosted Windows `D:` drive starting November 30, 2026. Hosted jobs whose temporary directory is on that drive need a compatible upstream workflow revision before releases can run on the new image. [GitHub runner image announcement](https://github.com/actions/runner-images/issues/15315)
+Hosted package creation, publication and routing use the pinned toolkit's scratch selector. It verifies that `RUNNER_TEMP` is writable NTFS and falls back to the runner account's `LocalApplicationData` if needed, including when the temporary volume uses ReFS. If selection fails, check both locations for writable NTFS. [Pinned scratch selector](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/tools/HostedScratch.ps1)
 
 ## Persistent file logging
 
@@ -66,7 +64,7 @@ Restore-ClcIisDeployment -ApplicationId ssrs-web -TargetId $targetId `
 
 Recovery verifies the prior release and backup when replacement could have started. It validates the restored application against current external settings, then checks exact readiness and inventory. Recovery of a failed first installation can return to an empty, stopped Application with startup disabled. The original attempt record is kept as `before-recovery.json` and the release ordering high-water mark is retained. Confirm actual state before retrying. Keep pending state and journals intact. SQL, deliveries, Config, Keys, Logs and the worker profile have their own recovery procedures.
 
-See the pinned [upstream operator procedure](https://github.com/clcdpc/clc-deployment/blob/7fcfd03da044655b57fe47d55e234571bef035bd/docs/deployment.md#operator-procedure).
+See the pinned [upstream operator procedure](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/deployment.md#operator-procedure).
 
 ### Live IIS acceptance
 

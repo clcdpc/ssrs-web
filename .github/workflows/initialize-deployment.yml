@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: 7fcfd03da044655b57fe47d55e234571bef035bd
+          ref: e306d730d77c1a05868f124ab2719e71ae186499
           persist-credentials: false
       - name: Run the requested upstream host operation
         shell: pwsh

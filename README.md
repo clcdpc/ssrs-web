@@ -42,16 +42,20 @@ git diff --check
 
 Keep generated screenshots, logs, builds, and downloads under ignored `artifacts/`. [CI](.github/workflows/verify.yml) runs on PR updates and cancels superseded runs. Ordinary CI uses GitHub-hosted `ubuntu-latest` for Linux/browser checks and GitHub-hosted Windows for compatibility checks, admitting only trusted same-repository pull requests. The hosted Windows job checks the consumer contract, release packaging, deployment compatibility and workflow syntax against the pinned toolkit. It uses synthetic fixtures. Run `actionlint` from the repository root to check GitHub Actions syntax locally.
 
-To reproduce the Windows contract checks, check out the exact revision in [the consumer configuration](.clc/release.json) and set `$toolkit` to that checkout. Use stable PowerShell 7.6.6 or later within 7.x and choose a new output directory on NTFS.
+To reproduce the Windows contract checks, check out the exact revision in the consumer configuration and set `$toolkit` to that checkout. Use stable PowerShell 7.6.6 or later within 7.x. The toolkit selects verified writable NTFS for native packaging. [Consumer configuration](.clc/release.json)
 
 ```powershell
+. (Join-Path $toolkit 'tools/HostedScratch.ps1')
+$scratch = New-ClcHostedScratchDirectory
 ./scripts/release/Test-ConsumerDeployment.ps1 -ToolkitRoot $toolkit
-./scripts/release/Test-QualifiedPackage.ps1 -ToolkitRoot $toolkit -OutputDirectory artifacts/qualified-package
+pwsh -NoProfile -File ./scripts/release/Test-QualifiedPackage.ps1 -ToolkitRoot $toolkit -OutputDirectory (Join-Path $scratch 'qualification')
 ```
 
 ## Tagged releases
 
 The [tag workflow](.github/workflows/release.yml) qualifies and publishes an immutable GitHub Release on hosted runners. The shared deploy workflow verifies the artifact and deploys to the dedicated Windows target. Authorized DEV tags may select unmerged source. Stable tags require protected `master` ancestry. Beta and RC publish artifacts only.
+
+The shared workflows and toolkit are pinned to commit `e306d730d77c1a05868f124ab2719e71ae186499`. The application locks `Clc.Deployment.AspNetCore` at `0.1.0-beta.8`. [Clc.Deployment v0.1.0-beta.8](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
 
 Commission each server with [Initialize Deployment Host](docs/clc-deployment.md), then configure IIS and the external application settings and run read-only validation. Routine releases require an authorized tag push. See the [release reference](docs/operations/README.md#release-and-toolkit-reference) for package and recovery behavior.
 

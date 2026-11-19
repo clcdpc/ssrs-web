@@ -2,8 +2,6 @@
 
 Live Windows Server/IIS and SSRS Web commissioning status is **NOT RUN**. Use this procedure on DEV first. Production follows the same process on its own dedicated server.
 
-The first tag deployment is blocked by a defect in the pinned beta.6 shared release code. Resolve it with a reviewed upstream revision before the tagged deployment step. [Release verification](operations/troubleshooting.md#release-verification)
-
 ## 1. Prepare GitHub and the runners
 
 - Protect `master` with required review and checks. Limit version-tag creation to authorized release actors, protect version tags from updates/deletion, and enable immutable GitHub Releases.
@@ -15,7 +13,7 @@ The first tag deployment is blocked by a defect in the pinned beta.6 shared rele
   | Production | `ssrs-web-production` | Stable version tags |
 
 - Allow the protected `master` branch for initialization and the applicable release tags in each environment. Keep routine release deployments free of required reviewers and wait timers. Verify the tag policy itself restricts tag creation and mutation. The pinned deploy workflow independently checks stable tag ancestry.
-- Put the runners in restricted organization or enterprise runner groups. Limit repository access to `clcdpc/ssrs-web` and select workflows explicitly. Allow only `clcdpc/ssrs-web/.github/workflows/initialize-deployment.yml@refs/heads/master` and `clcdpc/clc-deployment/.github/workflows/application-deploy.yml@7fcfd03da044655b57fe47d55e234571bef035bd`. The shared workflow directly defines the tagged job. Keep the default `self-hosted`, `Windows` and `X64` labels plus the dedicated target label. Verify no unrestricted runner advertises either target label. Repository-scoped runners and label matching alone do not enforce workflow access. Keep the runners offline until these restrictions are in place. [GitHub runner group workflow access](https://docs.github.com/en/enterprise-cloud@latest/actions/how-tos/manage-runners/self-hosted-runners/manage-access)
+- Put the runners in restricted organization or enterprise runner groups. Limit repository access to `clcdpc/ssrs-web` and select workflows explicitly. Allow only `clcdpc/ssrs-web/.github/workflows/initialize-deployment.yml@refs/heads/master` and `clcdpc/clc-deployment/.github/workflows/application-deploy.yml@e306d730d77c1a05868f124ab2719e71ae186499`. The shared workflow directly defines the tagged job. Keep the default `self-hosted`, `Windows` and `X64` labels plus the dedicated target label. Verify no unrestricted runner advertises either target label. Repository-scoped runners and label matching alone do not enforce workflow access. Keep the runners offline until these restrictions are in place. [GitHub runner group workflow access](https://docs.github.com/en/enterprise-cloud@latest/actions/how-tos/manage-runners/self-hosted-runners/manage-access)
 
 ## 2. Prepare each server
 

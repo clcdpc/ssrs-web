@@ -16,9 +16,9 @@
       },
       "Clc.Deployment.AspNetCore": {
         "type": "Direct",
-        "requested": "[0.1.0-beta.6, 0.1.0-beta.6]",
-        "resolved": "0.1.0-beta.6",
-        "contentHash": "KCC8EZgXTxXSuBwWs+W+R61AZGW/CzF7siCb779GAHZuzP/FT3mIbFSIljip2AjrSXt1/Bi+bjsRzHfBC1sbCg=="
+        "requested": "[0.1.0-beta.8, 0.1.0-beta.8]",
+        "resolved": "0.1.0-beta.8",
+        "contentHash": "sdMmxMl+2JoTLja3E9ZE9Uk1dh3rFC8Anu0Ou62Q7Ub4hJA5ZzarhfOahX5jH5OmiGgHhtaTmgtMSKVPAnluVw=="
       },
       "Clc.Logging": {
         "type": "Direct",

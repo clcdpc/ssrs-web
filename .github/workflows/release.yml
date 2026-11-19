@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: 7fcfd03da044655b57fe47d55e234571bef035bd
+          ref: e306d730d77c1a05868f124ab2719e71ae186499
           path: artifacts/clc-deployment
           persist-credentials: false
       - name: Verify the exact tag and producer source
@@ -97,9 +97,8 @@ jobs:
       - name: Publish and verify the tagged application
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          # The toolkit needs NTFS for the publish and release ZIP.
-          $root = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "ssrs-package-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $null = New-Item -ItemType Directory -Path $root
+          . ./artifacts/clc-deployment/tools/HostedScratch.ps1
+          $root = New-ClcHostedScratchDirectory
           "CLC_PACKAGE_ROOT=$root" >> $env:GITHUB_ENV
           $ordinary = Join-Path $root 'ordinary-publish'
           $publish = Join-Path $root 'qualified-publish'
@@ -117,8 +116,6 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $sdk = (dotnet --version).Trim()
           $pin = (Get-Content -LiteralPath .clc/release.json -Raw | ConvertFrom-Json).orchestration.sharedRevision
-          # The beta.6 prequalified entry point calls this path helper before importing the module.
-          . ./artifacts/clc-deployment/src/Clc.Deployment/Private/Paths.ps1
           ./artifacts/clc-deployment/tools/release/New-ClcApplicationPackage.ps1 `
               -ConfigurationPath .clc/release.json -SourceRoot $PWD.Path -Reference $env:GITHUB_REF_NAME -SourceCommit $env:GITHUB_SHA `
               -SharedSourceCommit $pin -RunId ([long]$env:GITHUB_RUN_ID) -RunAttempt ([long]$env:GITHUB_RUN_ATTEMPT) `
@@ -146,7 +143,7 @@ jobs:
       contents: write
       actions: read
       id-token: write
-    uses: clcdpc/clc-deployment/.github/workflows/application-release.yml@7fcfd03da044655b57fe47d55e234571bef035bd
+    uses: clcdpc/clc-deployment/.github/workflows/application-release.yml@e306d730d77c1a05868f124ab2719e71ae186499
     with:
       reference: ${{ github.ref_name }}
       source-commit: ${{ github.sha }}
@@ -159,7 +156,7 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: clcdpc/clc-deployment/.github/workflows/application-deploy.yml@7fcfd03da044655b57fe47d55e234571bef035bd
+    uses: clcdpc/clc-deployment/.github/workflows/application-deploy.yml@e306d730d77c1a05868f124ab2719e71ae186499
     with:
       reference: ${{ github.ref_name }}
       source-commit: ${{ github.sha }}
