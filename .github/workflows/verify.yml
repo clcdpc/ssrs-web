@@ -18,101 +18,59 @@ jobs:
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
       (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 35
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: clcdpc/clc-deployment
+          ref: e306d730d77c1a05868f124ab2719e71ae186499
+          path: artifacts/clc-deployment
+          persist-credentials: false
+      - name: Read the exact SDK version and isolate its installation
+        id: sdk
+        shell: pwsh
+        run: |
+          "DOTNET_INSTALL_DIR=$env:RUNNER_TEMP/ssrs-dotnet" >> $env:GITHUB_ENV
+          $version = (Get-Content -LiteralPath global.json -Raw | ConvertFrom-Json).sdk.version
+          "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 10.0.303
+          dotnet-version: ${{ steps.sdk.outputs.version }}
+      - name: Provision the verified test tools
+        shell: pwsh
+        run: ./scripts/release/Initialize-ToolkitTestTools.ps1 -ToolkitRoot artifacts/clc-deployment -Destination "$env:RUNNER_TEMP/ssrs-test-tools"
+      - name: Check workflow syntax
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/ssrs-test-tools/actionlint/actionlint.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Actionlint failed.' }
+      - name: Check consumer workflow and toolkit lifecycle contracts
+        shell: pwsh
+        run: |
+          . ./artifacts/clc-deployment/tools/HostedScratch.ps1
+          $scratch = New-ClcHostedScratchDirectory
+          "CLC_TEST_SCRATCH=$scratch" >> $env:GITHUB_ENV
+          # Pester's native lifecycle and packaging fixtures require an NTFS TestDrive.
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+          & "$env:RUNNER_TEMP/ssrs-test-tools/pwsh/pwsh.exe" -NoProfile -NonInteractive -File ./scripts/release/Test-ConsumerDeployment.ps1 -ToolkitRoot artifacts/clc-deployment -PesterManifest "$env:RUNNER_TEMP/ssrs-test-tools/pester/Pester.psd1"
+          if ($LASTEXITCODE -ne 0) { throw 'Consumer deployment contract checks failed.' }
       - run: dotnet restore SsrsPortal.slnx --locked-mode
       - run: dotnet build SsrsPortal.slnx -c Release --no-restore
       - run: dotnet test tests/SsrsPortal.SubscriptionTests -c Release --no-build --filter "FullyQualifiedName~DeploymentCompatibility|FullyQualifiedName~ProgramDeploymentIntegration" --logger "console;verbosity=minimal"
-      - name: Verify trusted DEV workflow boundaries with synthetic host observations
-        shell: pwsh
-        run: ./scripts/release/Test-DevDeployment.ps1
-      - name: Verify tag admission and automatic deployment contracts
+      - name: Verify the real application publish and release package contract
         shell: pwsh
         run: |
-          ./scripts/release/Test-TagDeployment.ps1
-          ./scripts/release/Test-ReleaseArchive.ps1
-      - name: Verify read-only diagnostic workflow boundaries
-        shell: pwsh
-        run: |
-          # Same reviewed Actionlint 1.7.12 archive/digest as the pinned upstream diagnostic.
-          $tools=Join-Path $env:RUNNER_TEMP 'ssrs-diagnostic-actionlint'
-          New-Item -ItemType Directory -Path $tools | Out-Null
-          $archive=Join-Path $tools 'actionlint.zip'
-          Invoke-WebRequest -Uri https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip -OutFile $archive
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -cne '6E7241B51E6817EA6A047693D8E6FED13B31819C9A0DD6C5A726E1592D22F6E9') { throw 'Diagnostic.ActionlintDigestMismatch' }
-          Expand-Archive -LiteralPath $archive -DestinationPath $tools
-          ./scripts/release/Test-DeploymentReadiness.ps1 -ActionlintPath (Join-Path $tools 'actionlint.exe')
-      - name: Qualify ordinary and CLC Release publish web.config policies
-        shell: pwsh
-        run: |
-          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --no-restore --output artifacts/ci-ordinary-publish
-          if ($LASTEXITCODE) { throw 'Release.OrdinaryPublishFailed' }
-          ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-ordinary-publish
-          dotnet restore src/SsrsPortal/SsrsPortal.csproj --locked-mode --runtime win-x64 -p:ClcIdentityKind=Release
-          if ($LASTEXITCODE) { throw 'Release.RestoreFailed' }
-          dotnet publish src/SsrsPortal/SsrsPortal.csproj -c Release --runtime win-x64 --self-contained false --no-restore -p:UseAppHost=false -p:DebugType=None -p:DebugSymbols=false -p:ClcReleaseTag=v1.0.0-dev.1 -p:ClcTargetId=ssrs-web-dev -p:ClcReleaseId=ssrs-web-ci-qualification -p:ClcSourceCommit=1111111111111111111111111111111111111111 -p:ClcIdentityKind=Release --output artifacts/ci-release-publish
-          if ($LASTEXITCODE) { throw 'Release.PublishFailed' }
-          ./scripts/release/Export-ThirdPartyNotices.ps1 -PublishDirectory artifacts/ci-release-publish
-          ./scripts/release/Test-ReleasePackaging.ps1 -PublishDirectory artifacts/ci-release-publish -OrdinaryPublishDirectory artifacts/ci-ordinary-publish -PublishedToolkit
-  windows-per-target-integration:
-    if: >-
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
-      (github.event_name != 'pull_request' && github.ref == 'refs/heads/master')
-    runs-on: windows-2022
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: clcdpc/clc-deployment
-          ref: 785511c6ba8b60afddf0722298f96f02ba163a01
-          path: artifacts/toolkit-source
-          persist-credentials: false
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
-        with:
-          dotnet-version: 10.0.303
-      - name: Authenticate the test PowerShell
-        shell: pwsh
-        run: |
-          ./scripts/release/Get-BuildPowerShell.ps1 -Destination "$env:RUNNER_TEMP/ssrs-per-target-pwsh"
-      - name: Prepare raw pinned toolkit checkout
-        shell: pwsh
-        run: |
-          git -C artifacts/toolkit-source config --local core.autocrlf false
-          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutConfigurationFailed' }
-          git -C artifacts/toolkit-source config --local core.eol lf
-          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutConfigurationFailed' }
-          # Rebuild the owned checkout and its index state under the same settings
-          # used by later Git status calls; a one-command override is insufficient.
-          git -C artifacts/toolkit-source checkout --force --detach 785511c6ba8b60afddf0722298f96f02ba163a01
-          if ($LASTEXITCODE) { throw 'Integration.RawCheckoutFailed' }
-      - name: Qualify candidate packaging and actual application lifecycle with synthetic IIS
-        shell: pwsh
-        run: |
-          $env:PATH="$env:RUNNER_TEMP/ssrs-per-target-pwsh;"+$env:PATH
-          & "$env:RUNNER_TEMP/ssrs-per-target-pwsh/pwsh.exe" -NoLogo -NoProfile -NonInteractive -File ./scripts/release/Test-DeploymentIntegration.ps1 -ToolkitSourceRoot "$env:GITHUB_WORKSPACE/artifacts/toolkit-source" -ToolkitSourceCommit 785511c6ba8b60afddf0722298f96f02ba163a01 -BuildInputs
-          if ($LASTEXITCODE) { throw 'Integration.SyntheticQualificationFailed' }
-      - name: Retain bounded synthetic qualification evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: per-target-synthetic-evidence
-          path: |
-            artifacts/deployment-integration/**/results.json
-            artifacts/deployment-integration/**/failure.json
-            artifacts/release-packaging-tests/**/results.json
-          retention-days: 14
-          if-no-files-found: ignore
+          $work = Join-Path $env:CLC_TEST_SCRATCH 'qualification'
+          & "$env:RUNNER_TEMP/ssrs-test-tools/pwsh/pwsh.exe" -NoProfile -NonInteractive -File ./scripts/release/Test-QualifiedPackage.ps1 -ToolkitRoot artifacts/clc-deployment -OutputDirectory $work
+          if ($LASTEXITCODE -ne 0) { throw 'Release package qualification failed.' }
   mock:
     # Defense in depth. Repository protections must also control untrusted
     # workflow changes; a submitted workflow can change this guard.
@@ -192,8 +150,6 @@ jobs:
         run: |
           $null=./scripts/release/New-SubscriptionSetupArtifact.ps1 -OutputPath (Join-Path $PWD 'artifacts/administrative-setup.zip') -SourceCommit $env:GITHUB_SHA
           ./scripts/release/Test-SubscriptionPublish.ps1 -PublishDirectory artifacts/publish -AdministrationArchive artifacts/administrative-setup.zip
-          ./scripts/release/Test-ReleasePackaging.ps1
-          ./scripts/release/Test-DevDeployment.ps1
       - name: Verify published example and exclude operational configuration/logging fixtures
         shell: pwsh
         run: |

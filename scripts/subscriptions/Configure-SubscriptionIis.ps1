@@ -21,4 +21,4 @@ foreach ($commandArguments in $commands) {
     & $appCmd @commandArguments
     if ($LASTEXITCODE -ne 0) { throw 'IIS subscription configuration failed. Review applicationHost.config and the published operations instructions.' }
 }
-Write-Output 'IIS subscription hosting configured. Verify cold start, recycle, app-offline deployment and failure diagnostics before operational acceptance.'
+Write-Output 'IIS subscription hosting configured. Verify cold start, recycle, deployment and failure diagnostics before operational acceptance.'

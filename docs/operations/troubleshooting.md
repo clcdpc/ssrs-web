@@ -2,11 +2,11 @@
 
 [Back to operations](README.md)
 
-## Build-time deployment toolkit
+## Release verification
 
-The checked-in [toolkit lock](../../deployment/toolkit.lock.json) selects published `Clc.Deployment` `0.1.0-beta.5` for format-3 packaging. `Release.ToolkitArchivePinMismatch` means the downloaded archive digest disagrees with the lock. `Release.ToolkitInventoryPinMismatch` means the verified module inventory disagrees with the lock. The authenticated verifier also rejects source/version disagreement. `Release.Prerequisite.RenamedToolkitPublicationAndRepinRequired` indicates an old format or missing descriptor, including the historical beta.3 PowerShell archive.
+A failure before the Windows deployment job usually concerns the tagged source, producer job, package contract, shared source pin, release immutability or published digest. Check the hosted job summaries and the [release and toolkit reference](README.md#release-and-toolkit-reference). Keep published assets immutable. If a built release needs new bytes, qualify a new permitted tag.
 
-See [repeatable Windows packaging checks](README.md#repeatable-local-checks) for the published toolkit and actual CLC Release output. The upstream beta.5 Release reports `immutable=false`; the independent exact archive digest remains the acquisition trust boundary. For initial host installation and activation, follow [authorized enrollment](../clc-deployment.md#phase-4--prepare-bootstrap-and-enroll-clcdeployment).
+Hosted package creation, publication and routing use the pinned toolkit's scratch selector. It verifies that `RUNNER_TEMP` is writable NTFS and falls back to the runner account's `LocalApplicationData` if needed, including when the temporary volume uses ReFS. If selection fails, check both locations for writable NTFS. [Pinned scratch selector](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/tools/HostedScratch.ps1)
 
 ## Persistent file logging
 
@@ -41,31 +41,30 @@ Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOver
 
 ### Startup troubleshooting and deployment
 
-For initial setup follow [the devweb commissioning procedure](../clc-deployment.md); the [optional GitHub diagnostic](../../.github/workflows/diagnose-deployment.yml) is read-only, never accesses hosts and does not gate deployment. For exact release/rerun behavior see the [release reference](README.md#release-and-toolkit-reference).
-
-If the deployment shell cannot start or reports `Ssrs.TrustedWorkflowRequired`, check `pwsh` resolution under the runner service's actual identity and effective PATH. The approved global executable must report stable PowerShell 7.6.6 or newer within 7.x. The same entry guard also requires Windows and the `deploy` workflow job. Verify the executable and search-path protections using the [read-only host checks](../clc-deployment.md#phase-2--prepare-devweb).
+Use the [DEVWEB commissioning guide](../clc-deployment.md) for Preview, Initialize and read-only Validate. If the host shell cannot start, check `pwsh` resolution under the runner service's identity and PATH. The approved executable reports stable PowerShell 7.6.6 or newer within 7.x.
 
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
 The [CLC deployment runbook](../clc-deployment.md) preserves Config and Logs outside the managed release, with Config read-only and Logs write/modify access for runtime. The single worker drains without overlapping recycle. Deployment neither packages configuration/logs nor changes their ACLs.
 
-The consumer preflight checks that the physical Logs path is disjoint from the application and protected roots; it does not inspect or grant the runtime account's effective NTFS rights. Pre-create Logs and verify Modify access, including create/append/rollover/retention, under the actual pool identity. Do not grant that identity write access to the ProgramData application parent, Config or toolkit control state. Separately grant the runtime account read/write access to its dedicated [Data Protection key directory](README.md#persistent-data-protection-keys) for key creation and rotation. These live ACL checks remain **NOT RUN** until confirmed on the DEV host.
+Host Validate inspects effective access for the configured runtime account. Verify actual Log creation and rollover and user-scope DPAPI behavior under the worker during live acceptance. See [post-initialization permissions](README.md#post-initialization-ntfs-permissions) and [persistent keys](README.md#persistent-data-protection-keys).
 
 ## Deployment failure and explicit recovery
 
-Use upstream [failure behavior](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#failure-behavior) and [operator recovery](https://github.com/clcdpc/clc-deployment/blob/master/docs/deployment.md#operator-procedure) with the exact independently authenticated active runtime for `ssrs-web-dev`. Freeze competing IIS/configuration/filesystem/deployment changes. Preserve Application, protected current/journal/attempts, approvals, original packages, verified manifests/staging/backups/indexes, configuration, keys and actual pool/worker observations. Prove exact helper processes exited. Unknown lifetime, partial installation or corrupt/unverifiable state requires independent maintenance, not a normal retry.
+Record the failed attempt ID, observed IIS site/pool/worker state, and safe workflow summary. Preserve the protected local deployment records, staged package, verified backup, configuration and keys. Freeze competing IIS, filesystem and deployment changes. Investigate dependency and worker failures before attempting recovery. Unknown helper or worker lifetime, unrecognized live files, or missing/corrupt required backup needs manual reconciliation.
 
-Recover only the **latest failed attempt**, using the independently approved compatible configuration and selected release/backup. Use a fresh process from the approved PowerShell 7.x executable verified during host preparation.
+From an elevated stable PowerShell 7.x session on the affected server, use the reviewed toolkit source checkout matching [the pinned consumer revision](../../.clc/release.json). Set the variables to the actual module manifest path, target ID, configured IIS identity, unresolved attempt ID and a nonsecret incident reference.
 
 ```powershell
-Import-Module $independentlyVerifiedActiveManifest
-Restore-ClcIisDeployment -TargetId ssrs-web-dev -AttemptId $latestFailedAttemptId `
-    -Mode RestorePrevious -Reason $nonsecretIncidentReference -RecoveryApprovalId $independentExactApproval
+Import-Module $reviewedToolkitManifest
+Restore-ClcIisDeployment -ApplicationId ssrs-web -TargetId $targetId `
+    -ExpectedRuntimeAccount $runtimeAccount -RuntimeEnvironment Production `
+    -AttemptId $failedAttemptId -Reason $incidentReference
 ```
 
-For an automatically admitted recovery release, RecoveryApprovalId must select a separately authored enabled **schema-1** exact approval matching release/target/source/lineage/provenance/hashes, even if standing policy is revoked. Existing manually approved releases retain their normal recovery authority. AcceptCandidate and RestoreEmpty have separate admissibility requirements; neither is an automatic fallback. Never delete journals/locks/intents, edit state to Completed, fabricate approvals, blindly retry mutation, restart legacy code or assume reboot made recovery safe. Verify exact readiness/inventory and durable terminal state after recovery; preserve original evidence. File restoration does not roll back SQL, deliveries, configuration, keys or profiles.
+Recovery verifies the prior release and backup when replacement could have started. It validates the restored application against current external settings, then checks exact readiness and inventory. Recovery of a failed first installation can return to an empty, stopped Application with startup disabled. The original attempt record is kept as `before-recovery.json` and the release ordering high-water mark is retained. Confirm actual state before retrying. Keep pending state and journals intact. SQL, deliveries, Config, Keys, Logs and the worker profile have their own recovery procedures.
 
-**Reboot limitation:** no activation fence/startup hook prevents WAS starting mixed files if a reboot/external activation interrupts replacement. Ordinary replacement/startup/readiness failure attempts a bounded stop and retains evidence; actual Stopped/zero workers must be observed, otherwise report uncertainty. Accept this operational limitation before enabling deployment. A legacy cutover backup is not prior toolkit-approved release history; restoring legacy files is separately authorized maintenance.
+See the pinned [upstream operator procedure](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/deployment.md#operator-procedure).
 
 ### Live IIS acceptance
 

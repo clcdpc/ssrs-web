@@ -31,7 +31,7 @@ public sealed class ProgramDeploymentIntegrationTests
     [DataRow("v1.0.0", "ssrs-web-production")]
     public void ValidCompiledTargetUsesTheApplicationDirectory(string tag, string target)
     {
-        Assert.AreEqual("clc-ssrs-web", ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", "test-release", SyntheticReleaseSourceCommit, "Release", tag, target)));
+        Assert.AreEqual("clc-ssrs-web", ReleaseTarget.DirectoryName(CreateIdentityAssembly("ssrs-web", tag.Replace('.', '-'), SyntheticReleaseSourceCommit, "Release", tag, target)));
         Assert.AreEqual("clc-ssrs-web", Program.ApplicationDirectoryName);
         Assert.AreEqual("clc-ssrs-web", PersistentKeyOptions.ApplicationName);
         Assert.AreEqual("ssrs-web-dpapi-user-v1", PersistentKeyOptions.CompatibilityId);
@@ -89,7 +89,7 @@ public sealed class ProgramDeploymentIntegrationTests
         var publish = Path.Combine(artifacts, "publish");
         var result = await RunProcess("dotnet", repository,
             ["publish", Path.Combine(repository, "src", "SsrsPortal", "SsrsPortal.csproj"), "-c", "Release", "--artifacts-path", Path.Combine(artifacts, "build"),
-                "--output", publish, "-p:ClcIdentityKind=Release", "-p:ClcReleaseId=ssrs-web-artifact-test", "-p:ClcSourceCommit=" + SyntheticReleaseSourceCommit,
+                "--output", publish, "-p:ClcIdentityKind=Release", "-p:ClcReleaseId=" + tag.Replace('.', '-'), "-p:ClcSourceCommit=" + SyntheticReleaseSourceCommit,
                 "-p:ClcReleaseTag=" + tag, "-p:ClcTargetId="],
             timeout: TimeSpan.FromMinutes(2), preserveEnvironment: true);
         Assert.AreEqual(0, result.ExitCode, result.StandardOutput + result.StandardError);
@@ -114,7 +114,7 @@ public sealed class ProgramDeploymentIntegrationTests
         var repository = RepositoryRoot();
         var artifacts = Path.Combine(repository, "artifacts", "program-release-acceptance-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(artifacts);
-        var releaseId = "integration-test-" + Guid.NewGuid().ToString("N");
+        var releaseId = releaseTag.Replace('.', '-');
         var syntheticIdentity = PrepareSyntheticReleaseIdentity(releaseId, repository);
         var sourceCommit = syntheticIdentity.SourceCommit;
         var publish = Path.Combine(artifacts, "publish");
