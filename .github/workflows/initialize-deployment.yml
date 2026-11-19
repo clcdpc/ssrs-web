@@ -69,8 +69,6 @@ jobs:
 
   host:
     needs: admit
-    # The runner group must also restrict access to this master workflow
-    # and the pinned upstream reusable deployment workflow.
     environment: ${{ needs.admit.outputs.target-id }}
     runs-on: [self-hosted, Windows, X64, "${{ needs.admit.outputs.target-id }}"]
     timeout-minutes: 15

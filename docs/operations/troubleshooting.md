@@ -41,7 +41,7 @@ Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOver
 
 ### Startup troubleshooting and deployment
 
-Use the [DEVWEB commissioning guide](../clc-deployment.md) for Preview, Initialize and read-only Validate. If the host shell cannot start, check `pwsh` resolution under the runner service's identity and PATH. The approved executable reports stable PowerShell 7.6.6 or newer within 7.x.
+Use the [DEVWEB commissioning guide](../clc-deployment.md) for Preview, Initialize and read-only Validate. If the host shell cannot start, verify `pwsh` under the runner service's identity and PATH. [Runner setup and PowerShell checks](../clc-deployment.md#2-prepare-the-server-and-register-its-runner)
 
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
@@ -53,7 +53,7 @@ Host Validate inspects effective access for the configured runtime account. Veri
 
 Record the failed attempt ID, observed IIS site/pool/worker state, and safe workflow summary. Preserve the protected local deployment records, staged package, verified backup, configuration and keys. Freeze competing IIS, filesystem and deployment changes. Investigate dependency and worker failures before attempting recovery. Unknown helper or worker lifetime, unrecognized live files, or missing/corrupt required backup needs manual reconciliation.
 
-From an elevated stable PowerShell 7.x session on the affected server, use the reviewed toolkit source checkout matching [the pinned consumer revision](../../.clc/release.json). Set the variables to the actual module manifest path, target ID, configured IIS identity, unresolved attempt ID and a nonsecret incident reference.
+On the affected server, open an elevated stable x64 PowerShell session at version 7.6.6 or newer within 7.x. Use the reviewed toolkit checkout matching the pinned consumer revision. Set the variables to the actual module manifest path, target ID, configured IIS identity, unresolved attempt ID and a nonsecret incident reference. [Consumer pin](../../.clc/release.json)
 
 ```powershell
 Import-Module $reviewedToolkitManifest

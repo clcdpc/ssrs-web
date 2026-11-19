@@ -139,7 +139,6 @@ Byte budgets cover accounted session content and buffers, not the CLR working se
 ### Protecting and changing configuration
 
 - Administrators/SYSTEM control Config provisioning and credential rotation. The actual AD pool identity gets read/traverse only, with no file or directory writes.
-- A separately approved virtual-pool setup must grant its `IIS AppPool\<pool>` identity, not an interactive account.
 - Remove broad inherited Users/Authenticated Users/IIS_IUSRS access as appropriate. Inspect effective permissions and protect administrative backups equally. Check access as the worker, not just the operator. See [post-initialization NTFS permissions](#post-initialization-ntfs-permissions).
 - Keep Config outside the web root, published app, release replacement tree and source checkout. Deployments must preserve it without packaging or overwriting credentials. Provisioning may need elevation; runtime must not need administrator membership.
 - Never use secret-bearing environment variables or command-line settings as a fallback. Remove obsolete `Portal:ApprovedReports`, `Entra:TenantId` and `Entra:GroupId` from every old provider. Even empty values cause startup errors.
@@ -186,7 +185,7 @@ Test tenant removal plus recycle. Test role deassignment after sign-out/new sign
 
 ## Release and toolkit reference
 
-GitHub authorizes release tags through protected branch/tag and runner policies. The [tag workflow](../../.github/workflows/release.yml) builds at the exact tag on a hosted runner and uploads a qualified package. The pinned shared publisher verifies its producer and package and publishes an immutable GitHub Release. The pinned shared deploy workflow verifies the published digest and routes DEV and stable releases to their respective Windows targets. Beta and RC publish only. DEV uses the Production ASP.NET Core runtime.
+Repository tag protections limit who can create release tags and keep tags fixed. Stable releases also require protected `master` ancestry. The tag workflow builds at the exact tagged source on a hosted runner and uploads a qualified package. The pinned shared publisher verifies its producer and package and publishes an immutable GitHub Release. The pinned shared deploy workflow verifies the published digest and routes DEV and stable releases by target label. Beta and RC publish only. DEV uses the Production ASP.NET Core runtime. [Tag workflow](../../.github/workflows/release.yml)
 
 The consumer uses contract 3 and produces contract-3 packages. Shared workflows, initialization and compatibility checks use commit `e306d730d77c1a05868f124ab2719e71ae186499` from Clc.Deployment `v0.1.0-beta.8`. The toolkit uses distribution format 4. The locked `Clc.Deployment.AspNetCore` `0.1.0-beta.8` companion uses validation and readiness protocol 1. [Consumer configuration](../../.clc/release.json) · [Immutable toolkit release](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
 
