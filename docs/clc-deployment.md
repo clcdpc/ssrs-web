@@ -6,19 +6,14 @@ Live commissioning and application acceptance remain open. Use the checks in [ph
 
 ## 1. Verify GitHub configuration
 
-Use repository administrator access in `clcdpc/ssrs-web`. The target ID identifies the logical deployment, the GitHub environment supplies its settings, and the target label selects the eligible runner. The runner name is the actual Windows hostname. Use these fixed identifiers in their respective settings.
-
-| Target | Deployment target ID | GitHub environment | Runner label |
-| --- | --- | --- | --- |
-| DEV | `ssrs-web-dev` | `ssrs-web-dev` | `ssrs-web-dev` |
-| Production | `ssrs-web-production` | `ssrs-web-production` | `ssrs-web-production` |
+Use repository administrator access in `clcdpc/ssrs-web`. DEV uses `ssrs-web-dev` and Production uses `ssrs-web-production`. Use each logical identifier as the deployment target ID, GitHub environment name and additional runner label. Use the actual Windows hostname as the GitHub runner name.
 
 1. Under **Settings → Rules → Rulesets**, verify that active rules for `master` require a pull request, block force pushes and protect the branch from deletion.
 2. Check that `mock` and `windows-deployment-compatibility` are required status checks and **Required approvals** is `0`. [GitHub ruleset reference](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)
 3. Verify the active tag creation ruleset for `v*` restricts creation to authorized release actors.
 4. Verify the separate `v*` tag protection ruleset blocks updates and deletion, including for actors permitted to create version tags.
 5. Under **Settings → General → Releases**, verify **Enable release immutability** is selected. [GitHub release immutability settings](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes)
-6. Under **Settings → Environments**, open or create each environment in the table. Verify these settings in both. [GitHub environment settings](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+6. Under **Settings → Environments**, open or create both target environments and verify these settings for each. [GitHub environment settings](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
 
    - **Deployment branches and tags** is **No restriction**.
    - **Required reviewers** and **Wait timer** are unset.
@@ -66,6 +61,8 @@ Use an elevated x64 Windows PowerShell console on the intended host.
 7. Confirm outbound HTTPS connectivity on port 443 to the required GitHub Actions destinations through the host's approved network or proxy configuration. [GitHub runner connectivity requirements](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#communication)
 
 ## 3. Register or verify the GitHub runner
+
+The approved repository-scoped runner configuration trusts eligible workflows in `clcdpc/ssrs-web`. Their jobs run under the deployment service account with local administrator privileges on the host. This is an accepted operational security tradeoff.
 
 For a fresh installation, confirm there is no matching repository runner or configured local installation. If one exists, use the conditional procedure below.
 
@@ -242,11 +239,16 @@ Use the version format for the target you validated. For an upgrade, choose a ve
 - `vMAJOR.MINOR.PATCH` deploys to Production and requires protected `master` ancestry.
 - `vMAJOR.MINOR.PATCH-beta.N` and `vMAJOR.MINOR.PATCH-rc.N` publish artifacts only.
 
-1. In a clone with `origin` pointing to `clcdpc/ssrs-web` for fetch and push, select the full SHA of the reviewed commit.
+1. In a clone with `origin` pointing to `clcdpc/ssrs-web` for fetch and push, select the target that passed host validation and enter the full SHA of the reviewed commit. Use the same PowerShell session through step 6 and stop on any error.
 
    ```powershell
-   git fetch --no-tags origin
-   if ($LASTEXITCODE -ne 0) { throw 'Could not fetch origin.' }
+   $target = Read-Host 'Enter the validated target (DEV or Production)'
+   switch -CaseSensitive ($target) {
+       'DEV' { git fetch --no-tags origin }
+       'Production' { git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master }
+       default { throw 'Enter DEV or Production.' }
+   }
+   if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the release source from origin.' }
 
    $sourceCommit = Read-Host 'Enter the full reviewed source commit SHA'
    $resolvedCommit = git rev-parse --verify --end-of-options "$sourceCommit^{commit}"
@@ -255,21 +257,42 @@ Use the version format for the target you validated. For an upgrade, choose a ve
    }
    ```
 
+   If the approved DEV commit is missing after the fetch, fetch a branch (`refs/heads/<branch>`) or pull request head (`refs/pull/<number>/head`) on `origin` that contains it. Then repeat step 1 with the same reviewed SHA. If the commit is only in another clone, have the source owner push it to a branch you can fetch from `origin`.
+
+   ```powershell
+   $sourceRef = Read-Host 'Enter the full ref containing the approved DEV commit'
+   git fetch --no-tags -- origin $sourceRef
+   if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the DEV source ref.' }
+   ```
+
 2. Verify the commit and inspect its release workflow and consumer configuration, including the shared revision pin. Stop if either file is missing or the contents differ from the intended release.
 
    ```powershell
    git show --no-patch --format=fuller $sourceCommit
+   if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the source commit.' }
+
    git show "$($sourceCommit):.github/workflows/release.yml" "$($sourceCommit):.clc/release.json"
+   if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the release workflow and consumer configuration.' }
    ```
 
-3. Select an unused authorized DEV version. For Production, first run `git merge-base --is-ancestor $sourceCommit origin/master` and require exit code `0`. Then set `$tag` to the approved stable version and proceed to step 4.
+3. Enter the authorized tag for the selected target. Production checks ancestry against the freshly fetched `origin/master` before prompting for the tag. Use a full clone or deepen a shallow clone if Git lacks the history to verify ancestry.
 
    ```powershell
-   $tag = Read-Host 'Enter the authorized DEV tag'
    $part = '(?:0|[1-9][0-9]{0,3})'
-   if ($tag -cnotmatch "\Av$part\.$part\.$part-dev\.[1-9][0-9]{0,3}\z" -or $tag.EndsWith('.9999')) {
-       throw 'Use an authorized vMAJOR.MINOR.PATCH-dev.N tag.'
+   $pattern = "\Av$part\.$part\.$part"
+   switch -CaseSensitive ($target) {
+       'DEV' { $pattern += '-dev\.(?!9999\z)[1-9][0-9]{0,3}' }
+       'Production' {
+           git merge-base --is-ancestor $sourceCommit refs/remotes/origin/master
+           if ($LASTEXITCODE -ne 0) {
+               throw 'Could not verify that the source commit is an ancestor of origin/master.'
+           }
+       }
+       default { throw 'Select DEV or Production in step 1.' }
    }
+
+   $tag = Read-Host "Enter the authorized $target tag"
+   if ($tag -cnotmatch "$pattern\z") { throw "Invalid $target tag. Use the format and bounds above." }
    ```
 
 4. Check the exact tag ref locally and remotely. Proceed only if both checks succeed and find no matching ref.
