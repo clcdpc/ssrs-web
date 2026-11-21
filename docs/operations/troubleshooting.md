@@ -6,7 +6,7 @@
 
 A failure before the Windows deployment job usually concerns the tagged source, producer job, package contract, shared source pin, release immutability or published digest. Check the hosted job summaries and the [release and toolkit reference](README.md#release-and-toolkit-reference). Keep published assets immutable. If a built release needs new bytes, qualify a new permitted tag.
 
-Hosted package creation, publication and routing use the pinned toolkit's scratch selector. It verifies that `RUNNER_TEMP` is writable NTFS and falls back to the runner account's `LocalApplicationData` if needed, including when the temporary volume uses ReFS. If selection fails, check both locations for writable NTFS. [Pinned scratch selector](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/tools/HostedScratch.ps1)
+Hosted package creation, publication and routing use the pinned toolkit's scratch selector. It verifies that `RUNNER_TEMP` is writable NTFS and falls back to the runner account's `LocalApplicationData` if needed, including when the temporary volume uses ReFS. If selection fails, check both locations for writable NTFS. [Pinned scratch selector](https://github.com/clcdpc/clc-deployment/blob/a65d5dae4a48258a2756d6d932791bb9c569130f/tools/HostedScratch.ps1)
 
 ## Persistent file logging
 
@@ -29,7 +29,7 @@ Defaults in the external application.json:
 }
 ```
 
-Named levels Trace through None are accepted; numeric or unknown levels fail safely. Daily rotation is automatic. **Before deploying this migration, manually remove the legacy `Logging:File:Rotation` key from existing application.json files**, including `"Rotation": "Daily"`; it is now rejected. Size bounds are 1 KiB–1 GiB; retention is 1–3650 days, even with file output disabled. Optional `MaxArchiveFiles` accepts 1–10000; omitting it preserves ssrs-web's historical unlimited archive count with age-based retention, overriding the shared package's count default. Unsupported options (including paths), empty/null option objects and malformed values stop startup without echoing values. Restart/recycle after changes. `Enabled=false` sends configured events through SafeLogLayout to native stderr and skips persistent-file readiness without creating a log file.
+Named levels Trace through None are accepted. Numeric or unknown levels fail safely. Daily rotation is automatic. **When reusing an existing `application.json`, remove the rejected legacy `Logging:File:Rotation` key**, including `"Rotation": "Daily"`. Change `Deployment.ConfigurationRevision` with the edit. Size bounds are 1 KiB–1 GiB and retention is 1–3650 days, even with file output disabled. Optional `MaxArchiveFiles` accepts 1–10000. Omitting it preserves ssrs-web's historical unlimited archive count with age-based retention, overriding the shared package's count default. Unsupported options (including paths), empty/null option objects and malformed values stop startup without echoing values. Restart or recycle a running deployment after changes. `Enabled=false` sends configured events through SafeLogLayout to native stderr and skips persistent-file readiness without creating a log file.
 
 NLog rolls dates on the first event after midnight and rolls size without restarting. One bounded event or flushed batch may exceed the 50 MiB threshold before rollover. Age cleanup covers matching files, including same-day archives, at startup/rollover as events arrive. Bootstrap does not touch files or delete archives; configured retention applies only after loading the authoritative snapshot. No separate service cleans up while the app is idle/stopped. Restarts append to existing files, including the latest numbered same-day file after size rollover. Existing logs remain in place across deployment. Disk use depends on traffic; monitor free space and tune category levels.
 
@@ -41,11 +41,11 @@ Use one IIS worker and **disable overlapped recycling** (`recycling.disallowOver
 
 ### Startup troubleshooting and deployment
 
-Use the [DEVWEB commissioning guide](../clc-deployment.md) for Preview, Initialize and read-only Validate. If the host shell cannot start, verify `pwsh` under the runner service's identity and PATH. [Runner setup and PowerShell checks](../clc-deployment.md#2-prepare-the-server-and-register-its-runner)
+Use the [SSRS Web Deployment and Commissioning Guide](../clc-deployment.md) for Preview, Initialize and read-only Validate. If the host shell cannot start, check `pwsh` resolution under the runner service's identity and effective PATH. [Runner service verification](../clc-deployment.md#4-verify-the-runner-service)
 
 Check hosting stderr first when application.json is missing or invalid: bootstrap runs before configured logging and is stderr-only. Parser/binder failures identify the file/section without secret-bearing JSON inner exceptions. After logging registration, Logs retains useful sanitized hosting/dependency failure chains; the outer fatal handler avoids rendering an already logged exception twice and exposes only a sanitized exception to hosting. Check normal IIS/Application event/hosting output for failures before managed code runs (Hosting Bundle/ANCM), or before host/log-directory selection. If Logs is unavailable, safe fallback output reports the logging failure. Fix permissions, locks or free space before restarting.
 
-The [CLC deployment runbook](../clc-deployment.md) preserves Config and Logs outside the managed release, with Config read-only and Logs write/modify access for runtime. The single worker drains without overlapping recycle. Deployment neither packages configuration/logs nor changes their ACLs.
+Deployment replaces the managed Application files and preserves Config and Logs with their ACLs. The worker has read access to Config and Modify access to Logs. The single worker drains before recycle. [Release and toolkit reference](README.md#release-and-toolkit-reference)
 
 Host Validate inspects effective access for the configured runtime account. Verify actual Log creation and rollover and user-scope DPAPI behavior under the worker during live acceptance. See [post-initialization permissions](README.md#post-initialization-ntfs-permissions) and [persistent keys](README.md#persistent-data-protection-keys).
 
@@ -62,9 +62,11 @@ Restore-ClcIisDeployment -ApplicationId ssrs-web -TargetId $targetId `
     -AttemptId $failedAttemptId -Reason $incidentReference
 ```
 
+For binding findings, check every hostname, port, SNI setting, certificate and competing site. For readiness failures, inspect the per-endpoint classifications in the protected attempt directory. All bindings must validate. One exact response can qualify deployment or restoration while another valid alias is unreachable. Confirm each production alias separately during acceptance.
+
 Recovery verifies the prior release and backup when replacement could have started. It validates the restored application against current external settings, then checks exact readiness and inventory. Recovery of a failed first installation can return to an empty, stopped Application with startup disabled. The original attempt record is kept as `before-recovery.json` and the release ordering high-water mark is retained. Confirm actual state before retrying. Keep pending state and journals intact. SQL, deliveries, Config, Keys, Logs and the worker profile have their own recovery procedures.
 
-See the pinned [upstream operator procedure](https://github.com/clcdpc/clc-deployment/blob/e306d730d77c1a05868f124ab2719e71ae186499/docs/deployment.md#operator-procedure).
+See the pinned [upstream operator procedure](https://github.com/clcdpc/clc-deployment/blob/a65d5dae4a48258a2756d6d932791bb9c569130f/docs/deployment.md#operator-procedure).
 
 ### Live IIS acceptance
 
