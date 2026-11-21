@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: clcdpc/clc-deployment
-          ref: e306d730d77c1a05868f124ab2719e71ae186499
+          ref: 99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8
           path: artifacts/clc-deployment
           persist-credentials: false
       - name: Read the exact SDK version and isolate its installation

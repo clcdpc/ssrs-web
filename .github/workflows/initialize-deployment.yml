@@ -14,13 +14,10 @@ on:
         default: Preview
         options: [Preview, Initialize, Validate]
       site-name:
-        description: IIS site name (Preview and Initialize)
+        description: Optional IIS site name override
         type: string
       pool-name:
-        description: IIS application pool name (Preview and Initialize)
-        type: string
-      readiness-uri:
-        description: HTTPS readiness URI ending in /health/ready (Preview and Initialize)
+        description: Optional IIS application pool name override
         type: string
 permissions: {}
 jobs:
@@ -37,9 +34,6 @@ jobs:
           REF_PROTECTED: ${{ github.ref_protected }}
           TARGET: ${{ inputs.target }}
           OPERATION: ${{ inputs.operation }}
-          SITE_NAME: ${{ inputs.site-name }}
-          POOL_NAME: ${{ inputs.pool-name }}
-          READINESS_URI: ${{ inputs.readiness-uri }}
         run: |
           if [[ "$GITHUB_REPOSITORY" != 'clcdpc/ssrs-web' ||
                 "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ||
@@ -56,13 +50,7 @@ jobs:
             *) echo '::error::Select DEV or Production.'; exit 1 ;;
           esac
           case "$OPERATION" in
-            Preview|Initialize)
-              if [[ -z "${SITE_NAME//[[:space:]]/}" || -z "${POOL_NAME//[[:space:]]/}" || -z "${READINESS_URI//[[:space:]]/}" ]]; then
-                echo '::error::Preview and Initialize require a site name, pool name and HTTPS readiness URI.'
-                exit 1
-              fi
-              ;;
-            Validate) ;;
+            Preview|Initialize|Validate) ;;
             *) echo '::error::Select Preview, Initialize or Validate.'; exit 1 ;;
           esac
           echo "target-id=$target_id" >> "$GITHUB_OUTPUT"
@@ -81,7 +69,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: e306d730d77c1a05868f124ab2719e71ae186499
+          ref: 99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8
           persist-credentials: false
       - name: Run the requested upstream host operation
         shell: pwsh
@@ -90,7 +78,6 @@ jobs:
           CLC_OPERATION: ${{ inputs.operation }}
           CLC_SITE_NAME: ${{ inputs.site-name }}
           CLC_POOL_NAME: ${{ inputs.pool-name }}
-          CLC_READINESS_URI: ${{ inputs.readiness-uri }}
           CLC_RUNTIME_ACCOUNT: ${{ vars.CLC_RUNTIME_ACCOUNT }}
         run: |
           $version = $PSVersionTable.PSVersion
@@ -107,8 +94,9 @@ jobs:
               $result = Test-ClcDeploymentHost @target -ExpectedRuntimeAccount $env:CLC_RUNTIME_ACCOUNT -RuntimeEnvironment Production
               $success = $result.ready
             } else {
-              $result = Initialize-ClcDeploymentHost @target -Operation $env:CLC_OPERATION `
-                  -SiteName $env:CLC_SITE_NAME -ApplicationPoolName $env:CLC_POOL_NAME -ReadinessUri $env:CLC_READINESS_URI
+              if ($env:CLC_SITE_NAME) { $target.SiteName = $env:CLC_SITE_NAME }
+              if ($env:CLC_POOL_NAME) { $target.ApplicationPoolName = $env:CLC_POOL_NAME }
+              $result = Initialize-ClcDeploymentHost @target -Operation $env:CLC_OPERATION
               $success = $result.status -cin @('Preview', 'InitializedNeedsConfiguration', 'AlreadyInitialized')
             }
           } catch {
@@ -133,7 +121,7 @@ jobs:
               'Pool settings: No Managed Code, Integrated, x64, one worker, Load User Profile, no overlapping recycling.')
           }
           if ($env:CLC_OPERATION -ceq 'Validate' -and $result.siteState -and $result.poolState) {
-            $summary += "IIS site: $($result.siteState). Pool: $($result.poolState)."
+            $summary += "IIS site: $($result.siteState). Pool: $($result.poolState). Valid HTTPS bindings: $($result.validBindings) of $($result.configuredBindings)."
           }
           foreach ($finding in $result.findings) {
             $summary += "- $($finding.code): $($finding.message)"
