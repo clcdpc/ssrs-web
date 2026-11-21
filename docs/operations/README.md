@@ -187,7 +187,7 @@ Test tenant removal plus recycle. Test role deassignment after sign-out/new sign
 
 Repository tag protections limit who can create release tags and keep tags fixed. Stable releases also require protected `master` ancestry. The tag workflow builds at the exact tagged source on a hosted runner and uploads a qualified package. The pinned shared publisher verifies its producer and package and publishes an immutable GitHub Release. The pinned shared deploy workflow verifies the published digest and routes DEV and stable releases by target label. Beta and RC publish only. DEV uses the Production ASP.NET Core runtime. [Tag workflow](../../.github/workflows/release.yml)
 
-The consumer uses contract 3 and produces contract-3 packages. Shared workflows, initialization and compatibility checks use commit `99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8` of Clc.Deployment. The toolkit uses distribution format 4. The locked `Clc.Deployment.AspNetCore` `0.1.0-beta.8` companion uses validation and readiness protocol 1. [Consumer configuration](../../.clc/release.json) · [Companion package release](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
+The consumer uses contract 3 and produces contract-3 packages. Shared workflows, initialization and compatibility checks use commit `a65d5dae4a48258a2756d6d932791bb9c569130f` of Clc.Deployment. The toolkit uses distribution format 4. The locked `Clc.Deployment.AspNetCore` `0.1.0-beta.8` companion uses validation and readiness protocol 1. [Consumer configuration](../../.clc/release.json) · [Companion package release](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
 
 The downloadable toolkit is stamped with the release version. SSRS package manifests record the builder's exact source commit and the module version committed at that revision.
 
@@ -197,7 +197,7 @@ The deployment engine obtains an exclusive lock, validates the application and e
 
 Keep the safe Actions summary and the corresponding local attempt evidence. The native ProgramData `clc-ssrs-web\Deployment` directory holds local host, state and attempt records. A pending attempt requires investigation and may require [explicit recovery](troubleshooting.md#deployment-failure-and-explicit-recovery). Protect Config, Keys, Logs and any SQL state with their normal backup procedures.
 
-See the [upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8/docs/contracts.md) and [repository verification](../../README.md#verification). Record live results using the [commissioning acceptance checks](../clc-deployment.md#9-verify-live-application-acceptance).
+See the [upstream six-command contract](https://github.com/clcdpc/clc-deployment/blob/a65d5dae4a48258a2756d6d932791bb9c569130f/docs/contracts.md) and [repository verification](../../README.md#verification). Record live results using the [commissioning acceptance checks](../clc-deployment.md#9-verify-live-application-acceptance).
 
 ## Catalog cache operations
 

@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: clcdpc/clc-deployment
-          ref: 99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8
+          ref: a65d5dae4a48258a2756d6d932791bb9c569130f
           path: artifacts/clc-deployment
           persist-credentials: false
       - name: Verify the exact tag and producer source
@@ -143,7 +143,7 @@ jobs:
       contents: write
       actions: read
       id-token: write
-    uses: clcdpc/clc-deployment/.github/workflows/application-release.yml@99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8
+    uses: clcdpc/clc-deployment/.github/workflows/application-release.yml@a65d5dae4a48258a2756d6d932791bb9c569130f
     with:
       reference: ${{ github.ref_name }}
       source-commit: ${{ github.sha }}
@@ -156,7 +156,7 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: clcdpc/clc-deployment/.github/workflows/application-deploy.yml@99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8
+    uses: clcdpc/clc-deployment/.github/workflows/application-deploy.yml@a65d5dae4a48258a2756d6d932791bb9c569130f
     with:
       reference: ${{ github.ref_name }}
       source-commit: ${{ github.sha }}

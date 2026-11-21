@@ -57,7 +57,7 @@ The [tag workflow](.github/workflows/release.yml) qualifies and publishes an imm
 
 Initialize with the target and operation. The toolkit defaults both IIS names to `ssrs-web` and discovers readiness from the HTTPS bindings configured after initialization.
 
-The shared workflows and toolkit are pinned to commit `99ff99fbebbcafe7bd244c20bfa60d9cf5e60de8`. The application locks `Clc.Deployment.AspNetCore` at `0.1.0-beta.8`. [Clc.Deployment v0.1.0-beta.8](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
+The shared workflows and toolkit are pinned to commit `a65d5dae4a48258a2756d6d932791bb9c569130f`. The application locks `Clc.Deployment.AspNetCore` at `0.1.0-beta.8`. [Clc.Deployment v0.1.0-beta.8](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
 
 Deployed DEV and Production both run on IIS with the `Production` ASP.NET Core environment, a compiled release identity and persistent Windows keys. Commission each host through the protected-master initialization, configuration and read-only validation procedure. An authorized tag push triggers routine deployment. [Commissioning guide](docs/clc-deployment.md) · [Release reference](docs/operations/README.md#release-and-toolkit-reference)
 
