@@ -57,6 +57,18 @@ Assert-Contract ($init -cmatch '(?m)^  host:\r?\n    needs: admit\s*$' -and
     $init.Contains('Initialize-ClcDeploymentHost @target -Operation $env:CLC_OPERATION') -and
     $init -cnotmatch 'upload-artifact|Invoke-ClcIisDeployment|Restore-ClcIisDeployment|inputs\.[^ }]+\s*\}\}.*\r?\n.*\$\(') 'Initialization runner or allowed operations changed.'
 
+$dispatch = $init.Substring(0, $init.IndexOf('permissions:'))
+$inputs = @([regex]::Matches($dispatch, '(?m)^      ([a-z-]+):\r?$') | ForEach-Object { $_.Groups[1].Value })
+Assert-Contract (($inputs -join ',') -ceq 'target,operation,site-name,pool-name') 'Unexpected host workflow inputs.'
+Assert-Contract ($init -cnotmatch 'readiness-uri|CLC_READINESS_URI|-ReadinessUri' -and
+    $init.Contains('if ($env:CLC_SITE_NAME) { $target.SiteName = $env:CLC_SITE_NAME }') -and
+    $init.Contains('if ($env:CLC_POOL_NAME) { $target.ApplicationPoolName = $env:CLC_POOL_NAME }')) 'Forward only explicit independent name overrides.'
+Import-Module (Join-Path $ToolkitRoot 'src/Clc.Deployment/Clc.Deployment.psd1') -Force
+$initialize = Get-Command Initialize-ClcDeploymentHost
+$required = @($initialize.ParameterSets[0].Parameters | Where-Object IsMandatory | ForEach-Object Name | Sort-Object)
+Assert-Contract (($required -join ',') -ceq 'ApplicationId,Operation,TargetId' -and
+    -not $initialize.Parameters.ContainsKey('ReadinessUri')) 'Unexpected public initialization contract.'
+
 foreach ($case in @(
     @{ tag = 'v1.2.3-dev.4'; id = 'v1-2-3-dev-4'; channel = 'DEV'; target = 'ssrs-web-dev' }
     @{ tag = 'v1.2.3'; id = 'v1-2-3'; channel = 'Production'; target = 'ssrs-web-production' }
@@ -96,12 +108,11 @@ $defaults = @{
     GITHUB_WORKFLOW_REF = 'clcdpc/ssrs-web/.github/workflows/initialize-deployment.yml@refs/heads/master'
     GITHUB_WORKFLOW_SHA = ('1' * 40); GITHUB_SHA = ('1' * 40); REF_PROTECTED = 'true'
     TARGET = 'DEV'; OPERATION = 'Preview'; GITHUB_OUTPUT = $outputPath
-    SITE_NAME = 'Test only'; POOL_NAME = 'Test only'; READINESS_URI = 'https://ssrs.invalid/health/ready'
 }
 foreach ($case in @(
     @{ env = @{}; expected = 'ssrs-web-dev' }
     @{ env = @{ TARGET = 'Production'; OPERATION = 'Initialize' }; expected = 'ssrs-web-production' }
-    @{ env = @{ OPERATION = 'Validate'; SITE_NAME = ''; POOL_NAME = ''; READINESS_URI = '' }; expected = 'ssrs-web-dev' }
+    @{ env = @{ OPERATION = 'Validate' }; expected = 'ssrs-web-dev' }
     @{ env = @{ GITHUB_REF = 'refs/heads/untrusted' }; expected = '' }
     @{ env = @{ GITHUB_EVENT_NAME = 'pull_request' }; expected = '' }
     @{ env = @{ GITHUB_REPOSITORY = 'example/ssrs-web' }; expected = '' }
@@ -109,7 +120,6 @@ foreach ($case in @(
     @{ env = @{ GITHUB_WORKFLOW_SHA = ('2' * 40) }; expected = '' }
     @{ env = @{ REF_PROTECTED = 'false' }; expected = '' }
     @{ env = @{ TARGET = 'ssrs-web-production' }; expected = '' }
-    @{ env = @{ SITE_NAME = ' '; OPERATION = 'Initialize' }; expected = '' }
     @{ env = @{ OPERATION = 'Restore' }; expected = '' }
 )) {
     [IO.File]::WriteAllText($outputPath, '')
@@ -138,7 +148,7 @@ Write-Output 'Consumer configuration, routing and hosted initialization admissio
 if ($PesterManifest) {
     Import-Module (Resolve-Path -LiteralPath $PesterManifest).Path -Force
     $pester = New-PesterConfiguration
-    $pester.Run.Path = @('SharedApplicationRelease', 'ReleaseApi', 'HostedReleaseExecution', 'IisConfiguration', 'Lifecycle') | ForEach-Object {
+    $pester.Run.Path = @('SharedApplicationRelease', 'ReleaseApi', 'HostedReleaseExecution', 'Contracts', 'IisConfiguration', 'IisBindings', 'Readiness', 'ReadinessTransport', 'Lifecycle') | ForEach-Object {
         Join-Path $ToolkitRoot "tests/$_.Tests.ps1"
     }
     $pester.Run.PassThru = $true

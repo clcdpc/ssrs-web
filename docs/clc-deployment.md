@@ -116,24 +116,22 @@ Proceed to phase 4 once the service is installed.
 
 ## 5. Preview and initialize IIS
 
-Start with the verified runner online. Have the intended IIS names and approved portal DNS hostname available.
+Start with the verified runner online. On a fresh server the IIS site and pool both default to `ssrs-web`. Existing hosts reuse the site and pool recorded during initialization.
 
 1. In **Actions**, open **Initialize Deployment Host** and choose **Run workflow**. [Initialization workflow](../.github/workflows/initialize-deployment.yml)
 2. Select protected `master` in the branch selector.
 3. Select **DEV** or **Production** for the intended host.
 4. Select **Preview**.
-5. Enter `site-name`. Use 1–64 ASCII letters, digits, periods, underscores, hyphens or internal spaces. Begin with a letter or digit and omit a trailing period or space.
-6. Enter `pool-name`. Use 1–64 ASCII letters, digits, periods, underscores or hyphens. Begin with a letter or digit.
-7. Enter `readiness-uri` as `https://<portal-hostname>/health/ready`, using the approved DNS hostname and the port if it differs from 443. The URI is at most 256 characters, with no credentials, query or fragment.
-8. Run **Preview**.
-9. Review the job identity from phase 4 and the run summary. Preview is read-only.
+5. Leave both name overrides blank for the normal installation. Supply `site-name` or `pool-name` independently if the new site or pool needs a different name. An explicit name on an existing host must match the recorded value.
+6. Run **Preview**.
+7. Review the job identity from phase 4 and the run summary. Preview is read-only.
 
    - `Preview` reports the planned paths, stopped unbound IIS resources and pool settings. Proceed to **Initialize**.
    - `AlreadyInitialized` means the inputs match the existing recorded host. Verify its site, pool and root. Continue with configuration review, or use phase 7 to validate an already deployed host.
    - `Blocked` or a failed run requires review of the findings and local evidence before proceeding. Preserve any existing IIS resources, files and records while the administrator reconciles the conflict.
 
-10. For a fresh host, run **Initialize** from protected `master` with the same target, site, pool and readiness URI. Expect `InitializedNeedsConfiguration`. A matching repeat reports `AlreadyInitialized`. Preserve any partial scaffold if initialization fails.
-11. Verify the fresh scaffold on the host before adding configuration.
+8. For a fresh host, run **Initialize** from protected `master` with the same target and any overrides used for Preview. Expect `InitializedNeedsConfiguration`. A matching repeat reports `AlreadyInitialized`. Preserve any partial scaffold if initialization fails.
+9. Verify the fresh scaffold on the host before adding configuration.
 
     - The site root points to `Application` in the native ProgramData `clc-ssrs-web` directory and uses the dedicated pool.
     - `Application`, `Config`, `Keys`, `Logs`, `Inbox` and `Deployment` exist as siblings. `Deployment` contains the host and initial state records.
@@ -148,7 +146,7 @@ Keep the site and pool stopped with both automatic startup flags disabled throug
 
 1. In IIS Manager, open the dedicated pool's **Advanced Settings → Identity**, select **Custom account**, and enter the approved AD worker credentials. This identity must match `CLC_RUNTIME_ACCOUNT`.
 2. Set the pool variable `ASPNETCORE_ENVIRONMENT` to `Production` on either target. Review effective environment settings for overrides. [IIS hosting settings](operations/README.md#host-setup)
-3. Add one HTTPS binding with the exact readiness hostname and port. Select an unexpired, trusted certificate that matches the hostname and has a private key in the Local Computer store. Confirm that DNS resolves the portal hostname to the intended host from the runner.
+3. Configure one or more HTTPS bindings with explicit portal DNS hostnames and ports. Use SNI for names sharing an address and port. Select a current, trusted hostname-matching certificate with a private key in the Local Computer store for every binding. Install the intermediates needed for local machine validation of the server-authentication chain. Configure DNS for each intended name to reach the managed site from the runner. The Windows hostname identifies the GitHub runner. IIS supplies the portal hostnames.
 4. Apply the mandatory site-specific ANCM shutdown policy in protected `applicationHost.config`. Set and lock `shutdownTimeLimit="60"` for the actual site. [ANCM policy XML and hosting settings](operations/README.md#host-setup)
 5. Enable IIS Anonymous Authentication so ASP.NET Core can serve readiness and handle Entra sign-in. Confirm the one-worker in-process hosting settings and keep routine stdout logging, detailed errors and request/body tracing disabled. The release supplies the in-process `web.config`.
 
@@ -181,7 +179,7 @@ Provision the file before deploying the managed application.
    **Existing configuration only.** Skip the copy and review the file in place. Remove the rejected legacy `Logging:File:Rotation` setting, including `"Rotation": "Daily"`. [Logging reference](operations/troubleshooting.md#persistent-file-logging)
 
 3. Restrict the file to administrative control and worker read access before entering credentials. Store secrets in the protected external file. Keep them out of command lines, GitHub variables, source control and the managed `Application` directory.
-4. Set `AllowedHosts` to the approved portal hostname or hostnames. Use the hostname from the IIS binding for this target.
+4. Set `AllowedHosts` to the approved portal hostname or hostnames. Include each IIS hostname intended to serve this portal.
 5. Configure the SSRS endpoint and catalog. [SSRS access and catalog policy](operations/README.md#shared-catalog-policy)
 
    - Set `Portal:ReportServer` to the approved HTTPS `/ReportServer` endpoint.
@@ -191,7 +189,7 @@ Provision the file before deploying the managed application.
 
 6. Configure the approved organizational multi-tenant Entra registration. [Entra registration and assignment](operations/README.md#registration-and-assignment)
 
-   - Register the HTTPS portal origin plus `/signin-oidc` as a Web redirect URI. Include the portal port if nondefault.
+   - For every hostname intended for Entra sign-in, register its HTTPS origin plus `/signin-oidc` as a Web redirect URI. Include the portal port if nondefault.
    - Confirm tenant consent and assignment of the exact `ReportViewer` role.
    - Set `Entra:ClientId`, `Entra:ClientSecret` and the approved organizational GUIDs in `Entra:AllowedTenantIds`.
 
@@ -218,12 +216,12 @@ Leave `CatalogMonitor:Enabled` and `Subscriptions:Enabled` false until their pre
 1. Open **Initialize Deployment Host → Run workflow** and select protected `master`.
 2. Select the same target used for initialization.
 3. Select **Validate**.
-4. Leave `site-name`, `pool-name` and `readiness-uri` blank. The workflow reads the recorded values and uses the selected environment's `CLC_RUNTIME_ACCOUNT`.
+4. Leave the overrides blank. Validate reads the recorded site and pool and uses the selected environment’s `CLC_RUNTIME_ACCOUNT`.
 5. Run the workflow.
 6. Review the summary. For a first deployment, expect `ReadyForFirstDeployment` with the site and pool stopped. A previously deployed host that passes returns `ReadyForDeployment`.
 7. Resolve findings and repeat **Validate**. If it reports `RecoveryRequired`, review the pending attempt through the [explicit recovery procedure](operations/troubleshooting.md#deployment-failure-and-explicit-recovery).
 
-Validate is read-only. It checks the recorded site and pool, worker identity, HTTPS binding, nonempty external configuration file up to 4 MiB, runtime permissions, hosting environment and deployment state. A first-deployment pass requires both startup flags disabled. The deployment later validates application configuration and starts the worker to check Data Protection and logging. Live acceptance covers Entra sign-in, SSRS execution and any enabled SQL or delivery services.
+Validate is read-only. It checks the recorded site and pool, worker identity, all configured HTTPS bindings and certificates, competing bindings, nonempty external configuration file up to 4 MiB, runtime permissions, hosting environment and deployment state. A first-deployment pass requires both startup flags disabled. The deployment later validates application configuration and starts the worker to check Data Protection and logging. Live acceptance covers Entra sign-in, SSRS execution and any enabled SQL or delivery services.
 
 ## 8. Preflight and deploy an authorized release
 
@@ -325,14 +323,9 @@ Use the version format for the target you validated. For an upgrade, choose a ve
 9. Verify publication succeeded and the GitHub Release for that tag is marked **Immutable**. Record the published `release.zip` SHA-256 digest. [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 10. Verify the shared deployment ran unattended on the Windows runner named for the intended host and returned `Deployed`. For a failure, preserve the run summary and consult [explicit recovery](operations/troubleshooting.md#deployment-failure-and-explicit-recovery).
 11. Confirm the site and pool are **Started**, one worker is running and both automatic startup flags are enabled. The deployment checks exact readiness before enabling startup and again afterward. [Release and toolkit reference](operations/README.md#release-and-toolkit-reference)
-12. From the deployment host, request the exact HTTPS readiness URI anonymously. Expect HTTP 200, `readinessContractVersion` `1`, `status` `ready`, `applicationId` `ssrs-web` and `runtimeEnvironment` `Production`. Match `releaseId` and `sourceCommit` to the release and `configurationRevision` to the provisioned configuration. The release ID is the tag with its periods replaced by hyphens.
+12. Review the verified and unsuccessful counts. At each startup check the toolkit discovers `/health/ready` for each configured HTTPS hostname and port. Every binding must pass structural and certificate checks. A valid unreachable alias is reported in protected attempt diagnostics. Deployment requires at least one exact response for this application, release, source commit, runtime environment and configuration revision, with a single worker. No verified response fails deployment and retains the attempt for explicit recovery.
 
-    ```powershell
-    $readinessUri = Read-Host 'Enter the recorded HTTPS readiness URI'
-    $response = Invoke-WebRequest -Uri $readinessUri -MaximumRedirection 0
-    $response.StatusCode
-    $response.Content | ConvertFrom-Json
-    ```
+    Administrators can add or remove aliases between attempts. Validate the new configuration before the next release. Existing v1 host records keep their original identity and historical URL. Older tagged workflows retain their old toolkit and single-binding requirements.
 
 ## 9. Verify live application acceptance
 
@@ -343,6 +336,7 @@ Record these milestones as they occur:
 3. **First deployment successful.** Retain the release digest, attempt ID, actual IIS startup and exact HTTPS readiness result from phase 8.
 4. **Live application acceptance completed.** Record the evidence for each applicable check below.
 
+- From the deployment host, verify anonymous HTTPS `/health/ready` on every intended production hostname and port. Match the release ID, source commit, `Production` environment and configuration revision. Exercise sign-in on each intended OIDC origin.
 - Confirm the effective AD worker identity, Entra sign-in and authorization, SSRS catalog access and report execution with the actual IIS topology. Verify render and export fidelity, accessibility, isolation and known-record date boundaries. [Application live gates](operations/README.md#live-gate-checklist)
 - Confirm the worker can use the persistent DPAPI ring across recycle and verify the actual file logging and rollover behavior. [Persistent keys](operations/README.md#persistent-data-protection-keys) · [Live IIS and logging checks](operations/troubleshooting.md#live-iis-acceptance)
 - Deploy a newer authorized release in DEV. Verify the retained prior Application backup and preservation of external Config, Keys and Logs under the same worker profile.
