@@ -6,7 +6,7 @@ Staff in approved Microsoft Entra tenants need the `ReportViewer` role. Everyone
 
 Optional [subscriptions](docs/operations/subscriptions.md) use SQL Server, Hangfire, and Postmark without archiving output. The optional read-only [SQL monitor](docs/operations/catalog-monitor.md) refreshes catalog metadata; it never grants access.
 
-For DEV host commissioning, start with [the DEVWEB commissioning guide](docs/clc-deployment.md). Use [operations](docs/operations/README.md) for application configuration/Entra/keys and [troubleshooting](docs/operations/troubleshooting.md) for logging and recovery.
+To commission a DEV or Production IIS host, follow the [SSRS Web Deployment and Commissioning Guide](docs/clc-deployment.md). Use [operations](docs/operations/README.md) for application configuration, Entra and keys, and [troubleshooting](docs/operations/troubleshooting.md) for logging and recovery.
 
 ## Verification
 
@@ -57,12 +57,14 @@ The [tag workflow](.github/workflows/release.yml) qualifies and publishes an imm
 
 The shared workflows and toolkit are pinned to commit `e306d730d77c1a05868f124ab2719e71ae186499`. The application locks `Clc.Deployment.AspNetCore` at `0.1.0-beta.8`. [Clc.Deployment v0.1.0-beta.8](https://github.com/clcdpc/clc-deployment/releases/tag/v0.1.0-beta.8)
 
-Commission each server with [Initialize Deployment Host](docs/clc-deployment.md), then configure IIS and the external application settings and run read-only validation. Routine releases require an authorized tag push. See the [release reference](docs/operations/README.md#release-and-toolkit-reference) for package and recovery behavior.
+Deployed DEV and Production both run on IIS with the `Production` ASP.NET Core environment, a compiled release identity and persistent Windows keys. Commission each host through the protected-master initialization, configuration and read-only validation procedure. An authorized tag push triggers routine deployment. [Commissioning guide](docs/clc-deployment.md) · [Release reference](docs/operations/README.md#release-and-toolkit-reference)
 
-## Run against DEV SSRS
+## Run locally against DEV SSRS
 
-1. For local Synthetic development on Windows, use the native ProgramData application directory `clc-ssrs-web`. Preserve existing files and protect credentials. See [configuration provisioning](docs/operations/README.md#external-configuration-provisioning).
-2. Set the HTTPS `/ReportServer` URL, roots/exclusions, Entra client ID/secret, and approved tenants. The process's Windows identity needs SSRS access.
+This workflow runs a local build in the `Development` environment with the local process's Windows identity.
+
+1. Use the native ProgramData application directory `clc-ssrs-web` on the development machine. Preserve existing files and protect credentials. If the file is absent, the first local startup creates a starter file and stops. [Configuration provisioning](docs/operations/README.md#external-configuration-provisioning)
+2. Set the DEV HTTPS `/ReportServer` URL, roots and exclusions, Entra client ID and secret, and approved tenants. Keep `Portal:UseMock` and `Portal:TestAuth` false. Grant the local process identity the approved DEV SSRS access.
 3. Allow `https://localhost:7443/signin-oidc` in Entra and assign staff the exact `ReportViewer` role. See [Entra setup](docs/operations/README.md#multi-tenant-entra-onboarding-and-global-catalog-policy).
 4. Start the portal:
 
@@ -71,15 +73,15 @@ dotnet dev-certs https --trust
 dotnet run --project src/SsrsPortal --no-launch-profile -- --environment Development --urls https://localhost:7443
 ```
 
-Open [https://localhost:7443](https://localhost:7443). Configuration loads once at startup; restart after edits. The first run creates a missing starter file and stops; placeholders or invalid configuration also stop startup. Appsettings, user secrets, and ordinary environment/command-line settings are not fallbacks. Mock authentication and temporary configuration overrides are for isolated Development tests only.
+Open [https://localhost:7443](https://localhost:7443). The external file supplies operational settings and loads once at startup. Restart after edits. Placeholders or invalid configuration stop startup. Use mock authentication and temporary configuration overrides only for isolated Development tests.
 
-Subscriptions are disabled by default. Follow [local subscription setup](docs/operations/subscriptions.md#local-development-initialization) to enable them. Production and Staging require the [CLC deployment process](docs/clc-deployment.md), compiled release identity, and persistent Windows keys. Local checks do not qualify or authorize a CLC release.
+Subscriptions are disabled by default. Follow the [local subscription setup](docs/operations/subscriptions.md#local-development-initialization) to enable them in Development.
 
 ## Documentation
 
 - [Operations](docs/operations/README.md) and [troubleshooting](docs/operations/troubleshooting.md): configuration, IIS, Entra, logs, and diagnostics.
 - [Report workspace](docs/behavior/report-workspace.md), [expand/collapse](docs/behavior/report-expand-collapse.md), and [branding](docs/behavior/ssrs-branding.md): current behavior and limits.
-- [DEV commissioning](docs/clc-deployment.md): GitHub, DEVWEB, initialization, configuration, unattended tags and live acceptance.
+- [SSRS Web Deployment and Commissioning Guide](docs/clc-deployment.md) for GitHub setup, Windows runners, IIS initialization, tagged deployment and live acceptance.
 - [SOAP and renderer fixtures](tests/SsrsPortal.Tests/Fixtures/README.md): protocol expectations and synthetic coverage.
 
 ## Live acceptance

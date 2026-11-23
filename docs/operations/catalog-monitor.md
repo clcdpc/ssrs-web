@@ -2,7 +2,7 @@
 
 [Back to operations](README.md)
 
-The optional monitor is disabled by default and requires SQL Server 2016 or newer. Enable it only after an administrator verifies the dev SSRS schema and permissions. SQL only invalidates the shared metadata cache. SOAP supplies metadata; SSRS executes reports. The monitor installs no application database, SQL Agent job, trigger, view or stored procedure, and changes no SSRS schema.
+The optional monitor is disabled by default and can stay disabled through first deployment. It requires SQL Server 2016 or newer. Before enabling it, verify the target SSRS database schema, TLS and read-only worker permissions. SQL invalidates the shared metadata cache. SOAP supplies metadata and SSRS executes reports. The monitor installs no application database, SQL Agent job, trigger, view or stored procedure, and changes no SSRS schema.
 
 | JSON setting | Default and supported range |
 | --- | --- |
